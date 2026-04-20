@@ -13,21 +13,14 @@ xml_string = """
 <ROSETTASCRIPTS>
 
     <SIMPLE_METRICS>
-        <HelloWorldMetric name="hello_metric" number="42.0"/>
     </SIMPLE_METRICS>    
 
     <MOVERS>
-        <HelloWorldMover name="hello_mover" message="Hello, PyRosetta!"/>
-        PhiByXDegreesMover name="phi_mover" residue="1" degrees="15"/> # This line does not start with "kotnik v desno (>)", therefore is treated as a comment by Rosetta.
-        <RunSimpleMetrics name="run" metrics="hello_metric"/>
-        <CmdMover name="cmd_mover" command="hostname" iknowwhatiamdoing="True"/>
+        <RFDiffusion name="make_backbone" contig="[7-20]" num_designs="1" rfdiffusion_path="/ceph/hpc/home/olivierif/prosculpt/sif_files/rfdiff.sif" extra_args="" work_dir="" delete_dir="true" />
     </MOVERS>       
 
     <PROTOCOLS>
-        <Add mover="hello_mover"/>
-        Add mover="phi_mover"/> # This line does not start with "kotnik v desno (>)", therefore is treated as a comment by Rosetta.
-        <Add mover="run"/>
-        <Add mover="cmd_mover"/>
+        <Add mover="make_backbone"/>
     </PROTOCOLS>
 
 </ROSETTASCRIPTS>
@@ -37,5 +30,4 @@ xml_string = """
 xml = XmlObjects.create_from_string(xml_string)
 protocol = xml.get_mover("ParsedProtocol")
 protocol.apply(pose)
-metric_value = pose.scores['HelloWorldMetric']
-print(f"Metric value: {metric_value}")
+print(f"Pose size: {pose.size()} {len(pose)} {pose.total_residue()}, pose sequence: {pose.sequence()}")
