@@ -13,14 +13,14 @@ from pathlib import Path
 class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
     clones_ = list()
 
-    def __init__(self):
+    def __init__(self, contig=None, num_designs=None, rfdiffusion_path=None, extra_args=None, work_dir=None, delete_dir=None):
         pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
-        self.contig_ = None
-        self.num_designs_ = None
-        self.rfdiffusion_path_ = None
-        self.extra_args_ = None
-        self.work_dir_ = None
-        self.delete_dir_ = None
+        self.contig_ = contig
+        self.num_designs_ = num_designs
+        self.rfdiffusion_path_ = rfdiffusion_path
+        self.extra_args_ = extra_args
+        self.work_dir_ = work_dir
+        self.delete_dir_ = delete_dir
 
     def clone(self):
         copy = RFDiffusion()
