@@ -10,10 +10,7 @@ BASE_DIR = 'rosettalink'
 # Dictionary to organize modules by project directories with relative paths
 REGISTRATION_MODULES = {
     'movers': [
-        'HelloWorldMover',
-        'HelloWorldMetric',
-        'CmdMover',
-        'HelloWorldMover2',
+        'RFDiffusion',
     ],
 }
 
@@ -24,6 +21,6 @@ def register_all():
             module_name = f"{BASE_DIR}.{directory}.{relative_module}"
             try:
                 importlib.import_module(module_name)
-                #print(f"Successfully imported {module_name}")
+                print(f"Successfully imported {module_name}")
             except ImportError as e:
                 print(f"Optional module {module_name} could not be imported: {e}")
