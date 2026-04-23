@@ -22,6 +22,8 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         self.work_dir_ = work_dir
         self.delete_dir_ = delete_dir
 
+        print(f"[RFDiffusion] Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_}")
+
     def clone(self):
         copy = RFDiffusion()
         copy.contig_ = self.contig_
@@ -51,6 +53,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             inference.output_prefix=/output/ \
             'contigmap.contigs={self.contig_}' \
             inference.num_designs={self.num_designs_} \
+            {self.extra_args_ if self.extra_args_ else ''} \
             -cd /output"   # IMPORTANT: Needs to be within container (with leading slash): self.work_dir_ => /output/
             
         print(f"[RFDiffusion] Running command: {rfdiff_cmd_str}")
@@ -83,8 +86,8 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         self.contig_ = tag.get_option_string("contig")
         self.num_designs_ = tag.get_option_int("num_designs")
         self.rfdiffusion_path_ = tag.get_option_string("rfdiffusion_path")
-        self.extra_args_ = tag.get_option_string("extra_args")
-        self.work_dir_ = tag.get_option_string("work_dir")
+        self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
+        self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
         self.delete_dir_ = tag.get_option_bool("delete_dir")
 
         print(f"[RFDiffusion] Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_}")
@@ -110,7 +113,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
     @classmethod
     def provide_xml_schema(cls, xsd):
         from pyrosetta.rosetta.utility.tag import XMLSchemaAttribute, XMLSchemaType
-        from pyrosetta.rosetta.utility.tag import xs_string, xs_integer, xs_boolean 
+        from pyrosetta.rosetta.utility.tag import xs_string, xs_integer, xs_boolean
 
         attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
         attrlist.append(XMLSchemaAttribute.required_attribute(
@@ -125,21 +128,23 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             "rfdiffusion_path",
             XMLSchemaType(xs_string),
             "Path to the RFDiffusion executable or Docker image"))
-        attrlist.append(XMLSchemaAttribute.required_attribute(
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "extra_args",
             XMLSchemaType(xs_string),
-            "Extra arguments for the RFDiffusion executable, e.g. --some_flag value"))
-        attrlist.append(XMLSchemaAttribute.required_attribute(
+            "Extra arguments for the RFDiffusion executable, e.g. diffuser.T=99999",
+            ""))
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "work_dir",
             XMLSchemaType(xs_string),
-            "Directory where the RFDiffusion output will be stored"))
+            "Directory where the RFDiffusion output will be stored. If attribute not provided, a new tempfile.TemporaryDirectory will be used. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
+            ""))
         attrlist.append(XMLSchemaAttribute.required_attribute(
             "delete_dir",
             XMLSchemaType(xs_boolean),
             "Whether to delete the work directory after the run (what is 'after'? After returning the last pose when being multi-pose?)"))
 
         description = '''
-                        Runs RFDiffusion to generate backbone desings.
+                        Runs RFDiffusion to generate backbone designs.
                       '''
 
         pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes(
