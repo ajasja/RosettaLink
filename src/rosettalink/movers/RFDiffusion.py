@@ -5,9 +5,12 @@ import os
 
 import pyrosetta
 from rosettalink.decorators import register_mover
+from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
 
 import tempfile
 from pathlib import Path
+import pickle
+import numpy as np
 
 
 class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
@@ -44,7 +47,9 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         else:
             os.makedirs(self.work_dir_, exist_ok=True)
         os.makedirs(Path(self.work_dir_)/'schedules', exist_ok=True)
-        os.makedirs(Path(self.work_dir_)/'output', exist_ok=True)
+
+        # Save input pose to work_dir, so we can input it into RfDiff
+        pyrosetta.dump_pdb(pose, str(Path(self.work_dir_)/'input.pdb'))
 
         rfdiff_cmd_str = f"singularity run --nv \
             -B {self.work_dir_}:/output \
@@ -60,13 +65,47 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         self.run_and_log(rfdiff_cmd_str)
         # Get all .pdb files in the output directory and print their names
         output_dir = Path(self.work_dir_)
-        pdb_files = list(output_dir.glob('*.pdb'))
+        pdb_files = sorted(list(output_dir.glob('*.pdb'))) # _0, _1, _10, _2, _3 ...
         if not pdb_files:
             print(f"[RFDiffusion] No .pdb files found in output directory {output_dir}")
             raise Exception(f"No .pdb files found in output directory {output_dir}")
         print(f"[RFDiffusion] Found .pdb files: {[str(pdb) for pdb in pdb_files]}")
         pose2 = pyrosetta.pose_from_file(str(pdb_files[0])) #TODO: multi-pose
         pose.assign(pose2)
+        
+        # Parse the .trb file
+        trb_file = sorted(list(output_dir.glob('*.trb'))) # Same order as pdbs
+        if not trb_file:
+            print(f"[RFDiffusion] No .trb file found in output directory {output_dir}")
+            raise Exception(f"No .trb file found in output directory {output_dir}")
+        print(f"[RFDiffusion] Found .trb file: {trb_file[0]}")
+
+        with open(trb_file[0], "rb") as f:
+            trb_dict = pickle.load(f)
+        residues_to_choose_with_selector = ~trb_dict["inpaint_seq"]
+        print(f"[RFDiffusion] Residues to choose with selector: {residues_to_choose_with_selector}")
+        resnums = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector)[0] + 1).tolist())) # Rosetta expects 1-based indices
+        print(f"[RFDiffusion] Residue numbers to choose with selector: {resnums}")
+
+        # Store _de novo_ designed residues to pose cache
+        xml_string = f"""
+        <ROSETTASCRIPTS>
+            <RESIDUE_SELECTORS>
+                <Index name="nekiIndeksi" resnums="{resnums}" />
+            </RESIDUE_SELECTORS>
+            <MOVERS>
+                <StoreResidueSubset name="store_subset" residue_selector="nekiIndeksi" subset_name="de_novo_residues" />
+            </MOVERS>    
+            <PROTOCOLS>
+                <Add mover="store_subset"/>
+            </PROTOCOLS>
+        </ROSETTASCRIPTS>
+        """
+        xml = XmlObjects.create_from_string(xml_string)
+        protocol = xml.get_mover("ParsedProtocol")
+        protocol.apply(pose)
+
+
         try:
             print(f"[RFDiffusion] temp_dir: {temp_dir}")
             temp_dir.cleanup()
