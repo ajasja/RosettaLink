@@ -6,6 +6,7 @@ import os
 import pyrosetta
 from rosettalink.decorators import register_mover
 from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
+from rosettalink.utils import run_and_log
 
 import tempfile
 from pathlib import Path
@@ -62,7 +63,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             -cd /output"   # IMPORTANT: Needs to be within container (with leading slash): self.work_dir_ => /output/
             
         print(f"[RFDiffusion] Running command: {rfdiff_cmd_str}")
-        self.run_and_log(rfdiff_cmd_str)
+        run_and_log("RFDiffusion", rfdiff_cmd_str)
         # Get all .pdb files in the output directory and print their names
         output_dir = Path(self.work_dir_)
         pdb_files = sorted(list(output_dir.glob('*.pdb'))) # _0, _1, _10, _2, _3 ...
@@ -131,18 +132,6 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
 
         print(f"[RFDiffusion] Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_}")
     
-    def run_and_log(self, command):
-        """Runs a command using os.system and also logs the command before running using print"""
-        stat = os.system(command)
-        wife = os.WIFEXITED(stat)
-        exitCode = os.waitstatus_to_exitcode(stat)
-        print(f"[RFDiffusion] Command exited with status {stat} and WIFEXITED {wife}. Exit code: {exitCode}")
-        if exitCode != 0:
-            print("[RFDiffusion] There was an error running the command. We consider it fatal to prevent any file loss. Check the logs and contact the developer.")
-            dodatek = ""
-
-            raise Exception(f"[RFDiffusion] Command exited with exit code {exitCode}\n\n{dodatek}")
-
 
 
     @staticmethod
