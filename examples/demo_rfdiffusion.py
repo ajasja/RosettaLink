@@ -16,14 +16,14 @@ xml_string = """
     </SIMPLE_METRICS>    
 
     <RESIDUE_SELECTORS>
-        <StoredResidueSubset name="get_de_novo_residues" subset_name="de_novo_residues" />
-        <Not name="get_template_residues" selector="get_de_novo_residues" />
+        <StoredResidueSubset name="get_not_de_novo_residues" subset_name="inpaint_seq" />
+        <Not name="get_de_novo_residues" selector="get_not_de_novo_residues" />
     </RESIDUE_SELECTORS>
 
     <MOVERS>
-        <RFDiffusion name="make_backbone" contig="[3-4/0 5-6/A1-10/3/A15-16/2-2/0 A17-20]" num_designs="1" rfdiffusion_path="/ceph/hpc/home/olivierif/prosculpt/sif_files/rfdiff.sif" extra_args="inference.input_pdb=/output/input.pdb" delete_dir="true" work_dir="TESTNIDIRIRwInput6" />
+        <RFDiffusion name="make_backbone" contig="[3-4/0 5-6/A1-10/3/A15-16/2-2/0 A17-20]" num_designs="1" rfdiffusion_path="/ceph/hpc/home/olivierif/prosculpt/sif_files/rfdiff.sif" extra_args="inference.input_pdb=/output/input.pdb contigmap.inpaint_seq=[A5-18]" delete_dir="true" work_dir="TESTNIDIRIRinpaintMASKED" />
         <MutateResidue name="mutate_residue" residue_selector="get_de_novo_residues" new_res="ASP" preserve_atom_coords="false" mutate_self="false" />
-        <MutateResidue name="mutate_template" residue_selector="get_template_residues" new_res="GLU" preserve_atom_coords="false" mutate_self="false" />
+        <MutateResidue name="mutate_template" residue_selector="get_not_de_novo_residues" new_res="GLU" preserve_atom_coords="false" mutate_self="false" />
     </MOVERS>       
 
     <PROTOCOLS>

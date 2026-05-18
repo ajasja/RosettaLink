@@ -85,15 +85,20 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
 
         with open(trb_file[0], "rb") as f:
             trb_dict = pickle.load(f)
-        residues_to_choose_with_selector = ~trb_dict["inpaint_seq"]
-        print(f"[RFDiffusion] Residues to choose with selector: {residues_to_choose_with_selector}")
-        resnums = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector)[0] + 1).tolist())) # Rosetta expects 1-based indices
-        print(f"[RFDiffusion] Residue numbers to choose with selector: {resnums}")
+        residues_to_choose_with_selector_inpaint_seq = trb_dict["inpaint_seq"]
+        residues_to_choose_with_selector_inpaint_str = trb_dict["inpaint_str"]
+        print(f"[RFDiffusion] Residues to choose with selector: inpaint_seq {residues_to_choose_with_selector_inpaint_seq}; inpaint_str {residues_to_choose_with_selector_inpaint_str}")
+        resnums_inpaint_seq = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_seq)[0] + 1).tolist())) # Rosetta expects 1-based indices
+        resnums_inpaint_str = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_str)[0] + 1).tolist())) # Rosetta expects 1-based indices
+        print(f"[RFDiffusion] Residue numbers to choose with selector: inpaint_seq {resnums_inpaint_seq}; inpaint_str {resnums_inpaint_str}")
 
         # Store _de novo_ designed residues to pose cache
-        de_novo_residues_selector = ResidueIndexSelector(resnums)
-        de_novo_residues_srsm = StoreResidueSubsetMover(de_novo_residues_selector, 'de_novo_residues', True)
-        de_novo_residues_srsm.apply(pose)
+        inpaint_seq_selector = ResidueIndexSelector(resnums_inpaint_seq)
+        inpaint_str_selector = ResidueIndexSelector(resnums_inpaint_str)
+        inpaint_seq_srsm = StoreResidueSubsetMover(inpaint_seq_selector, 'inpaint_seq', True)
+        inpaint_str_srsm = StoreResidueSubsetMover(inpaint_str_selector, 'inpaint_str', True)
+        inpaint_seq_srsm.apply(pose)
+        inpaint_str_srsm.apply(pose)
 
         try:
             print(f"[RFDiffusion] temp_dir: {temp_dir}")
