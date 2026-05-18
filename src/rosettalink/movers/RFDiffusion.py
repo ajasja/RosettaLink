@@ -5,8 +5,10 @@ import os
 
 import pyrosetta
 from rosettalink.decorators import register_mover
-from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
 from rosettalink.utils import run_and_log
+from pyrosetta.rosetta.protocols.residue_selectors import StoreResidueSubsetMover
+from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector
+
 
 import tempfile
 from pathlib import Path
@@ -89,23 +91,9 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         print(f"[RFDiffusion] Residue numbers to choose with selector: {resnums}")
 
         # Store _de novo_ designed residues to pose cache
-        xml_string = f"""
-        <ROSETTASCRIPTS>
-            <RESIDUE_SELECTORS>
-                <Index name="nekiIndeksi" resnums="{resnums}" />
-            </RESIDUE_SELECTORS>
-            <MOVERS>
-                <StoreResidueSubset name="store_subset" residue_selector="nekiIndeksi" subset_name="de_novo_residues" />
-            </MOVERS>    
-            <PROTOCOLS>
-                <Add mover="store_subset"/>
-            </PROTOCOLS>
-        </ROSETTASCRIPTS>
-        """
-        xml = XmlObjects.create_from_string(xml_string)
-        protocol = xml.get_mover("ParsedProtocol")
-        protocol.apply(pose)
-
+        de_novo_residues_selector = ResidueIndexSelector(resnums)
+        de_novo_residues_srsm = StoreResidueSubsetMover(de_novo_residues_selector, 'de_novo_residues', True)
+        de_novo_residues_srsm.apply(pose)
 
         try:
             print(f"[RFDiffusion] temp_dir: {temp_dir}")
