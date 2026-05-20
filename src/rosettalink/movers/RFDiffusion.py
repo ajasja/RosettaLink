@@ -100,6 +100,12 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         inpaint_seq_srsm.apply(pose)
         inpaint_str_srsm.apply(pose)
 
+        # Also store inpaint info in pdb labels
+        for resnum in map(int, resnums_inpaint_seq.split(",")):
+            pose.pdb_info().add_reslabel(resnum, "inpaint_seq")
+        for resnum in map(int, resnums_inpaint_str.split(",")):
+            pose.pdb_info().add_reslabel(resnum, "inpaint_str")
+
         try:
             print(f"[RFDiffusion] temp_dir: {temp_dir}")
             temp_dir.cleanup()

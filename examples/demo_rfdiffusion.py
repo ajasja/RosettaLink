@@ -40,6 +40,19 @@ xml = XmlObjects.create_from_string(xml_string)
 protocol = xml.get_mover("ParsedProtocol")
 protocol.apply(pose)
 print(f"Pose size (All available attributes): {pose.size()} {len(pose)} {pose.total_residue()}, pose sequence: {pose.sequence()}")
+
+
+# Residues to mutate are also saved in pose.pdb_info().res_haslabel(1, "inpaint_seq")
+from pyrosetta.rosetta.protocols.simple_moves import MutateResidue
+mutate_residue = MutateResidue()
+mutate_residue.set_res_name("TYR")
+for i in range(1, pose.size()+1):
+    if pose.pdb_info().res_haslabel(i, "inpaint_seq"):
+        print(f"Mutating residue {i} which has label inpaint_seq")
+        mutate_residue.set_target(i)
+        mutate_residue.apply(pose)
+print(f"Pose size after mutating inpaint_seq residues to TYR: {pose.size()} {len(pose)} {pose.total_residue()}, pose sequence: {pose.sequence()}")
+
 exit()
 # Only required attributes
 xml_string2 = """
