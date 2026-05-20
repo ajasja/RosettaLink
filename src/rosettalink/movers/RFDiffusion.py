@@ -73,38 +73,41 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             print(f"[RFDiffusion] No .pdb files found in output directory {output_dir}")
             raise Exception(f"No .pdb files found in output directory {output_dir}")
         print(f"[RFDiffusion] Found .pdb files: {[str(pdb) for pdb in pdb_files]}")
-        pose2 = pyrosetta.pose_from_file(str(pdb_files[0])) #TODO: multi-pose
-        pose.assign(pose2)
-        
-        # Parse the .trb file
-        trb_file = sorted(list(output_dir.glob('*.trb'))) # Same order as pdbs
-        if not trb_file:
-            print(f"[RFDiffusion] No .trb file found in output directory {output_dir}")
-            raise Exception(f"No .trb file found in output directory {output_dir}")
-        print(f"[RFDiffusion] Found .trb file: {trb_file[0]}")
+        for pdb_file in pdb_files:
+            pose2 = pyrosetta.pose_from_file(str(pdb_file)) #TODO: multi-pose
+            pose.assign(pose2)
+            
+            # Parse the .trb file
+            trb_file = pdb_file.with_suffix('.trb')
+            if not trb_file:
+                print(f"[RFDiffusion] No .trb file found in output directory {output_dir}")
+                raise Exception(f"No .trb file found in output directory {output_dir}")
+            print(f"[RFDiffusion] Found .trb file: {trb_file}")
 
-        with open(trb_file[0], "rb") as f:
-            trb_dict = pickle.load(f)
-        residues_to_choose_with_selector_inpaint_seq = trb_dict["inpaint_seq"]
-        residues_to_choose_with_selector_inpaint_str = trb_dict["inpaint_str"]
-        print(f"[RFDiffusion] Residues to choose with selector: inpaint_seq {residues_to_choose_with_selector_inpaint_seq}; inpaint_str {residues_to_choose_with_selector_inpaint_str}")
-        resnums_inpaint_seq = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_seq)[0] + 1).tolist())) # Rosetta expects 1-based indices
-        resnums_inpaint_str = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_str)[0] + 1).tolist())) # Rosetta expects 1-based indices
-        print(f"[RFDiffusion] Residue numbers to choose with selector: inpaint_seq {resnums_inpaint_seq}; inpaint_str {resnums_inpaint_str}")
+            with open(trb_file, "rb") as f:
+                trb_dict = pickle.load(f)
+            residues_to_choose_with_selector_inpaint_seq = trb_dict["inpaint_seq"]
+            residues_to_choose_with_selector_inpaint_str = trb_dict["inpaint_str"]
+            print(f"[RFDiffusion] Residues to choose with selector: inpaint_seq {residues_to_choose_with_selector_inpaint_seq}; inpaint_str {residues_to_choose_with_selector_inpaint_str}")
+            resnums_inpaint_seq = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_seq)[0] + 1).tolist())) # Rosetta expects 1-based indices
+            resnums_inpaint_str = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_str)[0] + 1).tolist())) # Rosetta expects 1-based indices
+            print(f"[RFDiffusion] Residue numbers to choose with selector: inpaint_seq {resnums_inpaint_seq}; inpaint_str {resnums_inpaint_str}")
 
-        # Store _de novo_ designed residues to pose cache
-        inpaint_seq_selector = ResidueIndexSelector(resnums_inpaint_seq)
-        inpaint_str_selector = ResidueIndexSelector(resnums_inpaint_str)
-        inpaint_seq_srsm = StoreResidueSubsetMover(inpaint_seq_selector, 'inpaint_seq', True)
-        inpaint_str_srsm = StoreResidueSubsetMover(inpaint_str_selector, 'inpaint_str', True)
-        inpaint_seq_srsm.apply(pose)
-        inpaint_str_srsm.apply(pose)
+            # Store _de novo_ designed residues to pose cache
+            inpaint_seq_selector = ResidueIndexSelector(resnums_inpaint_seq)
+            inpaint_str_selector = ResidueIndexSelector(resnums_inpaint_str)
+            inpaint_seq_srsm = StoreResidueSubsetMover(inpaint_seq_selector, 'inpaint_seq', True)
+            inpaint_str_srsm = StoreResidueSubsetMover(inpaint_str_selector, 'inpaint_str', True)
+            inpaint_seq_srsm.apply(pose)
+            inpaint_str_srsm.apply(pose)
 
-        # Also store inpaint info in pdb labels
-        for resnum in map(int, resnums_inpaint_seq.split(",")):
-            pose.pdb_info().add_reslabel(resnum, "inpaint_seq")
-        for resnum in map(int, resnums_inpaint_str.split(",")):
-            pose.pdb_info().add_reslabel(resnum, "inpaint_str")
+            # Also store inpaint info in pdb labels
+            for resnum in map(int, resnums_inpaint_seq.split(",")):
+                pose.pdb_info().add_reslabel(resnum, "inpaint_seq")
+            for resnum in map(int, resnums_inpaint_str.split(",")):
+                pose.pdb_info().add_reslabel(resnum, "inpaint_str")
+            
+            break
 
         try:
             print(f"[RFDiffusion] temp_dir: {temp_dir}")
