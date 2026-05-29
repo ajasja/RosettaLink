@@ -6,6 +6,7 @@ import os
 import pyrosetta
 from rosettalink.decorators import register_mover
 from rosettalink.utils import run_and_log
+from rosettalink.utils import setup_tracer
 from pyrosetta.rosetta.protocols.residue_selectors import StoreResidueSubsetMover
 from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector
 
@@ -28,7 +29,9 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         self.work_dir_ = work_dir
         self.delete_dir_ = delete_dir
 
-        print(f"[RFDiffusion] Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_}")
+        self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, self.tracer_debug, self.tracer_trace, *_ = setup_tracer("[RFDiffusion]")
+
+        self.tracer_info << f"Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_} \n" and self.tracer_info.flush()
 
     def clone(self):
         copy = RFDiffusion()
@@ -46,7 +49,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             # Create a temporary directory
             temp_dir = tempfile.TemporaryDirectory()
             self.work_dir_ = temp_dir.name
-            print(f"[RFDiffusion] No work directory specified, using temporary directory: {self.work_dir_}")
+            self.tracer_info << f"No work directory specified, using temporary directory: {self.work_dir_} \n" and self.tracer_info.flush()
         else:
             os.makedirs(self.work_dir_, exist_ok=True)
         os.makedirs(Path(self.work_dir_)/'schedules', exist_ok=True)
@@ -64,15 +67,14 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             {self.extra_args_ if self.extra_args_ else ''} \
             -cd /output"   # IMPORTANT: Needs to be within container (with leading slash): self.work_dir_ => /output/
             
-        print(f"[RFDiffusion] Running command: {rfdiff_cmd_str}")
-        run_and_log("RFDiffusion", rfdiff_cmd_str)
+        run_and_log(rfdiff_cmd_str, self.tracer_info, self.tracer_error)
         # Get all .pdb files in the output directory and print their names
         output_dir = Path(self.work_dir_)
         pdb_files = sorted(list(output_dir.glob('*.pdb'))) # _0, _1, _10, _2, _3 ...
         if not pdb_files:
-            print(f"[RFDiffusion] No .pdb files found in output directory {output_dir}")
+            self.tracer_error << f"No .pdb files found in output directory {output_dir} \n" and self.tracer_error.flush()
             raise Exception(f"No .pdb files found in output directory {output_dir}")
-        print(f"[RFDiffusion] Found .pdb files: {[str(pdb) for pdb in pdb_files]}")
+        self.tracer_info << f"Found .pdb files: {[str(pdb) for pdb in pdb_files]} \n" and self.tracer_info.flush()
         for pdb_file in pdb_files:
             pose2 = pyrosetta.pose_from_file(str(pdb_file)) #TODO: multi-pose
             pose.assign(pose2)
@@ -80,18 +82,18 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             # Parse the .trb file
             trb_file = pdb_file.with_suffix('.trb')
             if not trb_file:
-                print(f"[RFDiffusion] No .trb file found in output directory {output_dir}")
+                self.tracer_error << f"No .trb file found in output directory {output_dir} \n" and self.tracer_error.flush()
                 raise Exception(f"No .trb file found in output directory {output_dir}")
-            print(f"[RFDiffusion] Found .trb file: {trb_file}")
+            self.tracer_info << f"Found .trb file: {trb_file} \n" and self.tracer_info.flush()
 
             with open(trb_file, "rb") as f:
                 trb_dict = pickle.load(f)
             residues_to_choose_with_selector_inpaint_seq = trb_dict["inpaint_seq"]
             residues_to_choose_with_selector_inpaint_str = trb_dict["inpaint_str"]
-            print(f"[RFDiffusion] Residues to choose with selector: inpaint_seq {residues_to_choose_with_selector_inpaint_seq}; inpaint_str {residues_to_choose_with_selector_inpaint_str}")
+            self.tracer_info << f"Residues to choose with selector: inpaint_seq {residues_to_choose_with_selector_inpaint_seq}; inpaint_str {residues_to_choose_with_selector_inpaint_str} \n" and self.tracer_info.flush()
             resnums_inpaint_seq = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_seq)[0] + 1).tolist())) # Rosetta expects 1-based indices
             resnums_inpaint_str = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_str)[0] + 1).tolist())) # Rosetta expects 1-based indices
-            print(f"[RFDiffusion] Residue numbers to choose with selector: inpaint_seq {resnums_inpaint_seq}; inpaint_str {resnums_inpaint_str}")
+            self.tracer_debug << f"Residue numbers to choose with selector: inpaint_seq {resnums_inpaint_seq}; inpaint_str {resnums_inpaint_str} \n" and self.tracer_debug.flush()
 
             # Store _de novo_ designed residues to pose cache
             inpaint_seq_selector = ResidueIndexSelector(resnums_inpaint_seq)
@@ -110,11 +112,11 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             break
 
         try:
-            print(f"[RFDiffusion] temp_dir: {temp_dir}")
+            self.tracer_debug << f"temp_dir: {temp_dir} \n" and self.tracer_debug.flush()
             temp_dir.cleanup()
-            print(f"[RFDiffusion] Cleaned up temporary directory {self.work_dir_}")
+            self.tracer_debug << f"Cleaned up temporary directory {self.work_dir_} \n" and self.tracer_debug.flush()
         except:
-            print(f"[RFDiffusion] It probably wasn't temporary {self.work_dir_}")
+            self.tracer_debug << f"It probably wasn't temporary {self.work_dir_} \n" and self.tracer_debug.flush()
 
 
 
@@ -124,7 +126,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         return self.mover_name()
 
     def parse_my_tag(self, tag, data):
-        print(f"[RFDiffusion] Parsing my tag @ RFDiffusion. Self: {self}, tag: {tag}, data: {data}")
+        self.tracer_debug << f"Parsing my tag @ RFDiffusion. Self: {self}, tag: {tag}, data: {data} \n" and self.tracer_debug.flush()
         self.contig_ = tag.get_option_string("contig")
         self.num_designs_ = tag.get_option_int("num_designs")
         self.rfdiffusion_path_ = tag.get_option_string("rfdiffusion_path")
@@ -132,7 +134,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
         self.delete_dir_ = tag.get_option_bool("delete_dir")
 
-        print(f"[RFDiffusion] Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_}")
+        self.tracer_info << f"Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_} \n" and self.tracer_info.flush()
     
 
 
