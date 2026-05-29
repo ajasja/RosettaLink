@@ -13,3 +13,9 @@ dependencies = [
     #"pyrosetta>=2025.47",
     "pyrosetta",
 ]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
