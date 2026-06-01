@@ -3,7 +3,8 @@ import rosettalink
 from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
 
 #rosettalink.init('-fast_restyping -mute all')
-rosettalink.init("") # Also prints debug, initialisation, more info about movers, their attributes ...
+#rosettalink.init('') # Also prints debug, initialisation, more info about movers, their attributes ...
+rosettalink.init(set_logging_handler='interactive')
 
 
 pose = pyrosetta.pose_from_sequence("ACDEFGHIKLMNPQRSTVWY")
@@ -62,7 +63,7 @@ xml_string2 = """
     </SIMPLE_METRICS>    
 
     <MOVERS>
-        <RFDiffusion name="make_backbone" contig="[7-20]" num_designs="1" rfdiffusion_path="/ceph/hpc/home/olivierif/prosculpt/sif_files/rfdiff.sif" delete_dir="true" />
+        <RFDiffusion name="make_backbone" contig="[7-20]" num_designs="1" rfdiffusion_path="/home/folivieri/prosculpt/singularity_files/rfdiff.sif" delete_dir="true" />
     </MOVERS>       
 
     <PROTOCOLS>
