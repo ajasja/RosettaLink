@@ -11,6 +11,7 @@ BASE_DIR = 'rosettalink'
 REGISTRATION_MODULES = {
     'movers': [
         'RFDiffusion',
+        'LigandMPNN',
     ],
 }
 

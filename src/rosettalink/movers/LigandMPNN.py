@@ -10,6 +10,7 @@ from rosettalink.utils import setup_tracer
 from pyrosetta.rosetta.protocols.residue_selectors import StoreResidueSubsetMover
 from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector
 from pyrosetta.rosetta.protocols.pose_creation import PoseFromSequenceMover
+from pyrosetta.rosetta.protocols.simple_moves import SimpleThreadingMover
 
 
 import tempfile
@@ -69,7 +70,10 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
             {self.extra_args_ if self.extra_args_ else ''}"
             
         run_and_log(ligmpnn_cmd_str, self.tracer_info, self.tracer_error)
-        # Get all .fa files in the output directory and print their names
+
+
+        """ 
+        # Using SimpleThreadingMover to add sidechains
         output_dir = Path(self.work_dir_) / "seqs"
         fa_files = sorted(list(output_dir.glob('*.fa'))) # _0, _1, _10, _2, _3 ...
         if not fa_files:
@@ -84,10 +88,32 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
             self.tracer_info << f"Parsed sequences from {fa_file}: {sequences} \n" and self.tracer_info.flush()
             sequences.pop(0) # input seq
 
-            self.tracer_debug << f"Using sequence {sequences[0].seq} to create pose with PoseFromSequenceMover \n" and self.tracer_debug.flush()
-            m = PoseFromSequenceMover(str(sequences[0].seq))
-            m.apply(pose)
+            seq = str(sequences[0].seq)
+            self.tracer_debug << f"Using sequence {seq} to create pose with SimpleThreadingMover \n" and self.tracer_debug.flush()
+            seqs = seq.split(":") # Not supported by ThreadingMover; for-loop it manually
+            onebasedindex = 1
+            for s in seqs:
+                m = SimpleThreadingMover(thread_sequence=s, start_position=onebasedindex)
+                m.apply(pose)
+                onebasedindex += len(s)
 
+            break """
+        
+
+
+        # Just taking LigandMPNN output pdbs (backbone atoms not present).
+        output_dir = Path(self.work_dir_) / "backbones"
+        pdb_files = sorted(list(output_dir.glob('*.pdb'))) # _0, _1, _10, _2, _3 ...
+        if not pdb_files:
+            self.tracer_error << f"No .pdb files found in output directory {output_dir} \n" and self.tracer_error.flush()
+            raise Exception(f"No .pdb files found in output directory {output_dir}")
+        self.tracer_info << f"Found .pdb files: {[str(pdb) for pdb in pdb_files]} \n" and self.tracer_info.flush()
+
+
+        for pdb_file in pdb_files:
+            pose2 = pyrosetta.pose_from_file(str(pdb_file)) #TODO: multi-pose
+            pose.assign(pose2)
+                        
             break
 
         try:
