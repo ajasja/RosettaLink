@@ -20,9 +20,15 @@ class PyRosettaScripts:
         self.residue_selector_creators_ = list()
         self._initialized = True
 
-    def init(self, options):
+    def init(self, options='-ex1 -ex2aro', *, extra_options='', set_logging_handler=None, notebook=None, silent=False):
         import pyrosetta
-        pyrosetta.init(options)
+        pyrosetta.init(
+            options,
+            extra_options=extra_options,
+            set_logging_handler=set_logging_handler,
+            notebook=notebook,
+            silent=silent,
+        )
         self._initialized = True
         self._register_all_components()
 

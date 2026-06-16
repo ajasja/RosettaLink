@@ -1,6 +1,5 @@
 import os
-from pyrosetta.rosetta.basic import Tracer
-from pyrosetta.rosetta.basic import TracerPriority
+from pyrosetta.rosetta.basic import Tracer, TracerPriority
 
 def run_and_log(command, tracer_info, tracer_error):
     """Runs a command using os.system and also logs the command before running using print"""
