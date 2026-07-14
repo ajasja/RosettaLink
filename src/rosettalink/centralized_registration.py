@@ -12,6 +12,7 @@ REGISTRATION_MODULES = {
     'movers': [
         'RFDiffusion',
         'LigandMPNN',
+        'ColabFold',
     ],
 }
 

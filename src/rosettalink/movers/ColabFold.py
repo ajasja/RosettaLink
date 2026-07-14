@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import pyrosetta
-from pyrosetta.rosetta.core.select.residue_selector import ReturnResidueSubsetSelector
+from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabelSelector
 from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
@@ -29,26 +29,25 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
 
     def __init__(
         self, 
-        replace_pose=True, 
+        replace_pose="1", 
         models="1,2,3,4,5", 
         msa_mode="single_sequence", 
         rank="auto", 
         prefix_name="AF2_",
         cmd_header=None,
-        colabfold_path=None, 
         extra_args=None, 
         work_dir=None, 
-        delete_dir=False
+        delete_dir="0"
     ):        
         pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
-
+        self.rmsd_metrics = []
+        
         self.replace_pose_ = replace_pose
         self.models_ = models
         self.msa_mode_ = msa_mode
         self.rank_ = rank
         self.prefix_name_ = prefix_name
         self.cmd_header_ = cmd_header
-        self.colabfold_path_ = colabfold_path
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
         self.delete_dir_ = delete_dir
@@ -64,7 +63,6 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
             f"\trank: {self.rank_}\n"
             f"\tprefix_name: {self.prefix_name_}\n"
             f"\tcmd_header: {self.cmd_header_}\n"
-            f"\tcolabfold_path: {self.colabfold_path_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
             f"\tdelete_dir: {self.delete_dir_}\n"
@@ -78,10 +76,10 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
         copy.rank_ = self.rank_
         copy.prefix_name_ = self.prefix_name_
         copy.cmd_header_ = self.cmd_header_
-        copy.colabfold_path_ = self.colabfold_path_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
         copy.delete_dir_ = self.delete_dir_
+        copy.rmsd_metrics = self.rmsd_metrics.copy()
         ColabFold.clones_.append(copy)
         return copy
     
@@ -101,11 +99,11 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
         fasta_path = work_dir / "input.fasta"
         with open(fasta_path, "w") as f:
             f.write(f">input\n{sequence}\n")
-        self.tracer_info << f"Wrote pose sequence to {fasta_path}\n" and self.tracer_info.flush()
+        self.tracer_info << f"Writing pose sequence: {fasta_path}\n" and self.tracer_info.flush()
 
         # --- RUN COLABFOLD --- #
         colabfold_cmd_str = (
-            f"{self.cmd_header_} {self.colabfold_path_} "
+            f"{self.cmd_header_} "
             f"--model-order {self.models_} "
             f"--msa-mode {self.msa_mode_} "
             f"--rank {self.rank_} "
@@ -128,26 +126,25 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
         best_pdb = next((pdb for pdb in pdb_files if "rank_001" in pdb.name), pdb_files[0])
         self.tracer_info << f"Best ColabFold prediction: {best_pdb}\n" and self.tracer_info.flush()
 
+        # --- REPLACE POSE --- #
         input_pose = pose.clone()
         if self.replace_pose_:
             best_pose = pyrosetta.pose_from_file(str(best_pdb))
             pose.assign(best_pose)
+            
+            reslabels_all = {}
+            pdb_info_old = input_pose.pdb_info()
+            for resnum in range(1, input_pose.total_residue() + 1):
+                reslabels = pdb_info_old.get_reslabels(resnum)
+                if reslabels:
+                    reslabels_all[resnum] = reslabels
+
+            pdb_info_new = pose.pdb_info()
+            for resnum, reslabels in reslabels_all.items():
+                for reslabel in reslabels:
+                    pdb_info_new.add_reslabel(resnum, reslabel)
+
             self.tracer_info << f"Replaced pose with best ColabFold prediction: {best_pdb}\n" and self.tracer_info.flush()
-
-        # --- RMSD METRICS --- #
-        for rmsd in self.rmsd_metrics:
-            input_selector = ReturnResidueSubsetSelector(rmsd["residue_selector_input"])
-            prediction_selector = ReturnResidueSubsetSelector(rmsd["residue_selector_prediction"])
-
-            rmsd_metric = pyrosetta.rosetta.core.simple_metrics.metrics.RMSDMetric()
-            rmsd_metric.set_residue_selector(prediction_selector)
-            rmsd_metric.set_residue_selector_reference(input_selector)
-            rmsd_metric.set_comparison_pose(input_pose)  
-
-            rmsd_value = rmsd_metric.calculate(pose)
-            rmsd_name = f"{self.prefix_name_}{rmsd['name']}"
-            setPoseExtraScore(pose, rmsd_name, rmsd_value)
-            self.tracer_info << f"Stored {rmsd_name}: {rmsd_value}\n" and self.tracer_info.flush()
 
         # --- STORE SCORES --- #
         json_files = sorted(work_dir.glob("*scores*.json"))
@@ -167,9 +164,13 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
                     self.tracer_info << f"\t{self.prefix_name_}plddt: {plddt}\n" and self.tracer_info.flush()
 
                     # plddt_sculpted
-                    sculpted = ReturnResidueSubsetSelector("sculpted")
-                    residues_to_exclude = set(np.nonzero(sculpted.apply(pose))[0])  
-                    plddt_per_residue = [scores["plddt"][i] for i in range(len(scores["plddt"])) if i not in residues_to_exclude]
+                    pdb_info = pose.pdb_info()
+                    sculpted_residues = set(
+                        resnum - 1
+                        for resnum in range(1, pose.total_residue() + 1)
+                        if pdb_info.res_haslabel(resnum, "sculpted")
+                    )
+                    plddt_per_residue = [scores["plddt"][i] for i in range(len(scores["plddt"])) if i in sculpted_residues]
                     plddt_sculpted = float(np.mean(plddt_per_residue))
                     setPoseExtraScore(pose, f"{self.prefix_name_}plddt_sculpted", plddt_sculpted)
                     self.tracer_info << f"\t{self.prefix_name_}plddt_sculpted: {plddt_sculpted}\n" and self.tracer_info.flush()  
@@ -179,6 +180,21 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
                     pae = float(np.mean(scores["pae"]))
                     setPoseExtraScore(pose, f"{self.prefix_name_}pae", pae)
                     self.tracer_info << f"\t{self.prefix_name_}pae: {pae}\n" and self.tracer_info.flush()
+        
+        # --- RMSD METRICS --- #
+        for rmsd in self.rmsd_metrics:
+            residue_selector = ResiduePDBInfoHasLabelSelector(rmsd["reslabel"]) 
+            rmsd_metric = pyrosetta.rosetta.core.simple_metrics.metrics.RMSDMetric()
+            rmsd_metric.set_residue_selector(residue_selector)
+            rmsd_metric.set_residue_selector_reference(residue_selector)
+            rmsd_metric.set_comparison_pose(input_pose)  
+
+            rmsd_value = rmsd_metric.calculate(pose)
+            rmsd_name = f"{self.prefix_name_}{rmsd['name']}"
+            setPoseExtraScore(pose, rmsd_name, rmsd_value)
+            self.tracer_info << f"\t{rmsd_name}: {rmsd_value}\n" and self.tracer_info.flush()
+
+
 
         # --- CLEANUP --- #
         if temp_dir:
@@ -199,43 +215,39 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
 
         # required attributes
         self.cmd_header_ = tag.get_option_string("cmd_header")
-        self.colabfold_path_ = tag.get_option_string("colabfold_path")
 
         # optional attributes
-        self.replace_pose_ = tag.get_option_bool("replace_pose") if tag.hasOption("replace_pose") else True
+        self.replace_pose_ = tag.get_option_bool("replace_pose") if tag.hasOption("replace_pose") else "1"
         self.models_ = tag.get_option_string("models") if tag.hasOption("models") else "1,2,3,4,5"
         self.msa_mode_ = tag.get_option_string("msa_mode") if tag.hasOption("msa_mode") else "single_sequence"
         self.rank_ = tag.get_option_string("rank") if tag.hasOption("rank") else "auto"
         self.prefix_name_ = tag.get_option_string("prefix_name") if tag.hasOption("prefix_name") else ""
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
-        self.delete_dir_ = tag.get_option_bool("delete_dir") if tag.hasOption("delete_dir") else False
+        self.delete_dir_ = tag.get_option_bool("delete_dir") if tag.hasOption("delete_dir") else "0"
 
         self.tracer_info << (
-            f"Parsed options:\n"
+            f"Parsing options:\n"
             f"\treplace_pose: {self.replace_pose_}\n"
             f"\tmodels: {self.models_}\n"
             f"\tmsa_mode: {self.msa_mode_}\n"
             f"\trank: {self.rank_}\n"
             f"\tprefix_name: {self.prefix_name_}\n"
             f"\tcmd_header: {self.cmd_header_}\n"
-            f"\tcolabfold_path: {self.colabfold_path_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
             f"\tdelete_dir: {self.delete_dir_}\n"
         ) and self.tracer_info.flush()
 
         # RMSD metrics
-        self.rmsd_metrics = []
         for child in tag.getTags():
             if child.getName() == "RMSD":
                 self.rmsd_metrics.append({
                     "name": child.get_option_string("name"),
-                    "residue_selector_input": child.get_option_string("residue_selector_input"),
-                    "residue_selector_prediction": child.get_option_string("residue_selector_prediction")
+                    "reslabel": child.get_option_string("reslabel"),
                 })
         rmsd_names = [rmsd["name"] for rmsd in self.rmsd_metrics]
-        self.tracer_info << f"Parsed RMSD metrics: {rmsd_names}\n" and self.tracer_info.flush()
+        self.tracer_info << f"RMSD metrics found: {rmsd_names}\n" and self.tracer_info.flush()
 
     @staticmethod
     def mover_name():
@@ -253,17 +265,13 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
             "cmd_header",
             XMLSchemaType(xs_string),
             "Start to the command string, dependent on user device"))
-        attrlist.append(XMLSchemaAttribute.required_attribute(
-            "colabfold_path",
-            XMLSchemaType(xs_string),
-            "Path to the ColabFold executable or container image"))
 
         # optional attributes
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "replace_pose",
             XMLSchemaType(xs_boolean),
             "Whether current pose is replaced with the rank_001 prediction",
-            1))
+            "1"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "models",
             XMLSchemaType(xs_string),
@@ -298,15 +306,34 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
             "delete_dir",
             XMLSchemaType(xs_boolean),
             "Whether to delete the working directory after the run",
-            False))
+            "0"))
+        
+        # RMSD attributes
+        rmsd_attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
+        rmsd_attrlist.append(
+            XMLSchemaAttribute.required_attribute(
+                "name",
+                XMLSchemaType(xs_string),
+                "RMSD metric name"
+            )
+        )
+        rmsd_attrlist.append(
+            XMLSchemaAttribute.required_attribute(
+                "reslabel",
+                XMLSchemaType(xs_string),
+                "Residue label over which RMSD is calculated"
+            )
+        )
 
         description =   '''
                         Runs ColabFold to predict protein structures.
                         '''
 
-        pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes( 
-            xsd, cls.mover_name(), description, attrlist)
-        
+        subelements = pyrosetta.rosetta.utility.tag.XMLSchemaSimpleSubelementList()
+        subelements.add_simple_subelement("RMSD", rmsd_attrlist, "RMSD applied over specified residue label")
+        pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes_and_repeatable_subelements(
+            xsd, cls.mover_name(), description, attrlist, subelements)
+
 
 @register_mover
 class ColabFoldCreator(pyrosetta.rosetta.protocols.moves.MoverCreator):
