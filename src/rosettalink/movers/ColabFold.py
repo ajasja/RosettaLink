@@ -183,18 +183,17 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
         
         # --- RMSD METRICS --- #
         for rmsd in self.rmsd_metrics:
-            residue_selector = ResiduePDBInfoHasLabelSelector(rmsd["reslabel"]) 
+            residue_selector_input = ResiduePDBInfoHasLabelSelector(rmsd["reslabel_input"]) 
+            residue_selector_prediction = ResiduePDBInfoHasLabelSelector(rmsd["reslabel_prediction"]) 
             rmsd_metric = pyrosetta.rosetta.core.simple_metrics.metrics.RMSDMetric()
-            rmsd_metric.set_residue_selector(residue_selector)
-            rmsd_metric.set_residue_selector_reference(residue_selector)
+            rmsd_metric.set_residue_selector(residue_selector_input)
+            rmsd_metric.set_residue_selector_reference(residue_selector_prediction)
             rmsd_metric.set_comparison_pose(input_pose)  
 
             rmsd_value = rmsd_metric.calculate(pose)
             rmsd_name = f"{self.prefix_name_}{rmsd['name']}"
             setPoseExtraScore(pose, rmsd_name, rmsd_value)
             self.tracer_info << f"\t{rmsd_name}: {rmsd_value}\n" and self.tracer_info.flush()
-
-
 
         # --- CLEANUP --- #
         if temp_dir:
@@ -244,7 +243,8 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
             if child.getName() == "RMSD":
                 self.rmsd_metrics.append({
                     "name": child.get_option_string("name"),
-                    "reslabel": child.get_option_string("reslabel"),
+                    "reslabel_input": child.get_option_string("reslabel_input"),
+                    "reslabel_prediction": child.get_option_string("reslabel_prediction"),
                 })
         rmsd_names = [rmsd["name"] for rmsd in self.rmsd_metrics]
         self.tracer_info << f"RMSD metrics found: {rmsd_names}\n" and self.tracer_info.flush()
@@ -319,9 +319,16 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
         )
         rmsd_attrlist.append(
             XMLSchemaAttribute.required_attribute(
-                "reslabel",
+                "reslabel_input",
                 XMLSchemaType(xs_string),
-                "Residue label over which RMSD is calculated"
+                "Residue label in input over which RMSD is calculated"
+            )
+        )
+        rmsd_attrlist.append(
+            XMLSchemaAttribute.required_attribute(
+                "reslabel_prediction",
+                XMLSchemaType(xs_string),
+                "Residue label in prediction over which RMSD is calculated"
             )
         )
 
