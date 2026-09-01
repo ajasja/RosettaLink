@@ -24,7 +24,7 @@ mkdir -p logs
 # shell hook, so a bare `conda activate` fails with
 # "CondaError: Run 'conda init' before 'conda activate'" - and, without
 # `set -e` above, that failure was silent: the job went on to run whatever
-# `python` was first on PATH (miniforge3's base env) instead of `prosculpt`.
+# `python` was first on PATH (miniforge3's base env) instead of `rosettalink`.
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate rosettalink
 
