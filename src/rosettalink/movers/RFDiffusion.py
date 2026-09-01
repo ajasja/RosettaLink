@@ -8,7 +8,7 @@ from rosettalink.decorators import register_mover
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
 from pyrosetta.rosetta.protocols.residue_selectors import StoreResidueSubsetMover
-from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector
+from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector, FalseResidueSelector
 
 
 import tempfile
@@ -28,6 +28,10 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
         self.delete_dir_ = delete_dir
+        # Populated by apply(): every design beyond the first, exposed to the
+        # rest of the Rosetta suite (JD2, RosettaScripts, ...) via the
+        # standard Mover::get_additional_output() one-to-many mechanism.
+        self.additional_poses_ = None
 
         self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, self.tracer_debug, self.tracer_trace, *_ = setup_tracer("[RFDiffusion]")
 
@@ -75,41 +79,24 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             self.tracer_error << f"No .pdb files found in output directory {output_dir} \n" and self.tracer_error.flush()
             raise Exception(f"No .pdb files found in output directory {output_dir}")
         self.tracer_info << f"Found .pdb files: {[str(pdb) for pdb in pdb_files]} \n" and self.tracer_info.flush()
-        for pdb_file in pdb_files:
-            pose2 = pyrosetta.pose_from_file(str(pdb_file)) #TODO: multi-pose
-            pose.assign(pose2)
-            
-            # Parse the .trb file
-            trb_file = pdb_file.with_suffix('.trb')
-            if not trb_file:
-                self.tracer_error << f"No .trb file found in output directory {output_dir} \n" and self.tracer_error.flush()
-                raise Exception(f"No .trb file found in output directory {output_dir}")
-            self.tracer_info << f"Found .trb file: {trb_file} \n" and self.tracer_info.flush()
 
-            with open(trb_file, "rb") as f:
-                trb_dict = pickle.load(f)
-            residues_to_choose_with_selector_inpaint_seq = trb_dict["inpaint_seq"]
-            residues_to_choose_with_selector_inpaint_str = trb_dict["inpaint_str"]
-            self.tracer_info << f"Residues to choose with selector: inpaint_seq {residues_to_choose_with_selector_inpaint_seq}; inpaint_str {residues_to_choose_with_selector_inpaint_str} \n" and self.tracer_info.flush()
-            resnums_inpaint_seq = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_seq)[0] + 1).tolist())) # Rosetta expects 1-based indices
-            resnums_inpaint_str = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_str)[0] + 1).tolist())) # Rosetta expects 1-based indices
-            self.tracer_debug << f"Residue numbers to choose with selector: inpaint_seq {resnums_inpaint_seq}; inpaint_str {resnums_inpaint_str} \n" and self.tracer_debug.flush()
+        designed_poses = [self._load_and_label_design(pdb_file) for pdb_file in pdb_files]
 
-            # Store _de novo_ designed residues to pose cache
-            inpaint_seq_selector = ResidueIndexSelector(resnums_inpaint_seq)
-            inpaint_str_selector = ResidueIndexSelector(resnums_inpaint_str)
-            inpaint_seq_srsm = StoreResidueSubsetMover(inpaint_seq_selector, 'inpaint_seq', True)
-            inpaint_str_srsm = StoreResidueSubsetMover(inpaint_str_selector, 'inpaint_str', True)
-            inpaint_seq_srsm.apply(pose)
-            inpaint_str_srsm.apply(pose)
+        # Primary output: the pose the caller (RosettaScripts/JD2/plain python)
+        # already holds a reference to gets the first design, exactly as before.
+        pose.assign(designed_poses[0])
 
-            # Also store inpaint info in pdb labels
-            for resnum in map(int, resnums_inpaint_seq.split(",")):
-                pose.pdb_info().add_reslabel(resnum, "inpaint_seq")
-            for resnum in map(int, resnums_inpaint_str.split(",")):
-                pose.pdb_info().add_reslabel(resnum, "inpaint_str")
-            
-            break
+        # Every further design is handed off through Mover::get_additional_output(),
+        # the standard Rosetta mechanism for one-to-many movers: JD2's job
+        # distributor (and therefore rosetta_scripts, RosettaScripts-driven
+        # PyRosetta code, MultiplePoseMover, etc.) automatically drains this
+        # after apply() and emits one output structure per pose, exactly like
+        # any other native multi-output mover. This replaces silently
+        # discarding every design past the first.
+        additional_poses = pyrosetta.rosetta.protocols.moves.Mover.get_additional_output(self)
+        for extra_pose in designed_poses[1:]:
+            additional_poses.append(extra_pose)
+        self.additional_poses_ = additional_poses
 
         try:
             self.tracer_debug << f"temp_dir: {temp_dir} \n" and self.tracer_debug.flush()
@@ -118,7 +105,58 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         except:
             self.tracer_debug << f"It probably wasn't temporary {self.work_dir_} \n" and self.tracer_debug.flush()
 
+    def _load_and_label_design(self, pdb_file):
+        """Load a single RFDiffusion output .pdb and stamp it with the same
+        inpaint_seq/inpaint_str pose-cache subsets and pdb_info reslabels that
+        the rest of the suite (selectors, downstream movers/filters) expects,
+        regardless of whether this design ends up as the primary output pose
+        or as one of the additional ones."""
+        pose = pyrosetta.pose_from_file(str(pdb_file))
 
+        # Parse the .trb file
+        trb_file = pdb_file.with_suffix('.trb')
+        if not trb_file.is_file():
+            self.tracer_error << f"No .trb file found for {pdb_file} \n" and self.tracer_error.flush()
+            raise Exception(f"No .trb file found for {pdb_file}")
+        self.tracer_info << f"Found .trb file: {trb_file} \n" and self.tracer_info.flush()
+
+        with open(trb_file, "rb") as f:
+            trb_dict = pickle.load(f)
+        residues_to_choose_with_selector_inpaint_seq = trb_dict["inpaint_seq"]
+        residues_to_choose_with_selector_inpaint_str = trb_dict["inpaint_str"]
+        self.tracer_info << f"Residues to choose with selector: inpaint_seq {residues_to_choose_with_selector_inpaint_seq}; inpaint_str {residues_to_choose_with_selector_inpaint_str} \n" and self.tracer_info.flush()
+        resnums_inpaint_seq = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_seq)[0] + 1).tolist())) # Rosetta expects 1-based indices
+        resnums_inpaint_str = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_str)[0] + 1).tolist())) # Rosetta expects 1-based indices
+        self.tracer_debug << f"Residue numbers to choose with selector: inpaint_seq {resnums_inpaint_seq}; inpaint_str {resnums_inpaint_str} \n" and self.tracer_debug.flush()
+
+        # Store _de novo_ designed residues to pose cache. A fully unconditional
+        # design (no motif/contig-kept residues at all) legitimately produces an
+        # empty resnums string here; ResidueIndexSelector can't parse that, so
+        # fall back to a selector that always resolves to "nothing selected".
+        inpaint_seq_selector = ResidueIndexSelector(resnums_inpaint_seq) if resnums_inpaint_seq else FalseResidueSelector()
+        inpaint_str_selector = ResidueIndexSelector(resnums_inpaint_str) if resnums_inpaint_str else FalseResidueSelector()
+        inpaint_seq_srsm = StoreResidueSubsetMover(inpaint_seq_selector, 'inpaint_seq', True)
+        inpaint_str_srsm = StoreResidueSubsetMover(inpaint_str_selector, 'inpaint_str', True)
+        inpaint_seq_srsm.apply(pose)
+        inpaint_str_srsm.apply(pose)
+
+        # Also store inpaint info in pdb labels
+        if resnums_inpaint_seq:
+            for resnum in map(int, resnums_inpaint_seq.split(",")):
+                pose.pdb_info().add_reslabel(resnum, "inpaint_seq")
+        if resnums_inpaint_str:
+            for resnum in map(int, resnums_inpaint_str.split(",")):
+                pose.pdb_info().add_reslabel(resnum, "inpaint_str")
+
+        return pose
+
+    def get_additional_output(self):
+        # Called by JD2/RosettaScripts (and anything else driving this mover
+        # through the standard Mover API) right after apply() to collect every
+        # design beyond the primary output pose.
+        if self.additional_poses_ is None:
+            return pyrosetta.rosetta.protocols.moves.Mover.get_additional_output(self)
+        return self.additional_poses_
 
 
 
@@ -173,7 +211,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         attrlist.append(XMLSchemaAttribute.required_attribute(
             "delete_dir",
             XMLSchemaType(xs_boolean),
-            "Whether to delete the work directory after the run (what is 'after'? After returning the last pose when being multi-pose?)"))
+            "Whether to delete the work directory after the run (after every design has been read from disk into the primary pose or the additional-output poses)"))
 
         description = '''
                         Runs RFDiffusion to generate backbone designs.
