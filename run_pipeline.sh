@@ -10,9 +10,13 @@
 # (this is exactly what let a failed `conda activate` below go unnoticed).
 set -euo pipefail
 
-# Anchor all relative paths (examples/..., logs/...) to this script's own
-# directory, regardless of where sbatch was invoked from.
-cd "$(dirname "${BASH_SOURCE[0]}")"
+# Anchor all relative paths (examples/..., logs/...) to the directory `sbatch`
+# was invoked from. NOT `dirname "${BASH_SOURCE[0]}"`: sbatch copies this
+# script into its own spool location on the compute node and runs that copy,
+# so BASH_SOURCE points there instead - a directory the job's user can't
+# write to, which is what caused "mkdir: cannot create directory 'logs':
+# Permission denied". $SLURM_SUBMIT_DIR is the one sbatch itself guarantees.
+cd "$SLURM_SUBMIT_DIR"
 
 mkdir -p logs
 
@@ -22,7 +26,7 @@ mkdir -p logs
 # `set -e` above, that failure was silent: the job went on to run whatever
 # `python` was first on PATH (miniforge3's base env) instead of `prosculpt`.
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate prosculpt
+conda activate rosettalink
 
 echo "python: $(which python)"
 echo "rosettalink: $(python -c 'import rosettalink, os; print(os.path.dirname(rosettalink.__file__))')"
