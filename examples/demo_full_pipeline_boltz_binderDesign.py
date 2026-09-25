@@ -91,6 +91,7 @@ PIPELINE_XML_TEMPLATE = """
                     <LigandMPNN name="make_sequence"
                         ligandmpnn_path="{ligandmpnn_path}"
                         batch_size="{num_sequences_per_binder}"
+                        fixed_reslabel="inpaint_seq"
                         work_dir="{ligandmpnn_work_dir}"
                         delete_dir="false" />
 

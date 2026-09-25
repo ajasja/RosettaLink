@@ -209,5 +209,6 @@ __marimo__/
 # RosettaLink pipeline run artifacts (SLURM logs, generated structures)
 /logs/
 /outputs/
+/output/
 /pipeline_output/
 /pipeline_output_xml/
