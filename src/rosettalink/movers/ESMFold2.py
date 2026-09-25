@@ -16,6 +16,11 @@
 # Each chain of the pose is folded as its own protein entry (ids A, B, C...
 # in pose order), so a complex is folded as a complex.
 #
+# fasta folds the records of a file instead of the pose sequence: one pose
+# per record, with chains of a record separated by colons. Each pose carries
+# its record id as the comment fasta_id, and since these structures have no
+# correspondence to the input pose, reslabels and RMSD metrics are skipped.
+#
 # Each prediction is written into work_dir as prediction_<i>.pdb (or .cif)
 # with confidence_<i>.json beside it, then read back into a pose.
 #
@@ -43,6 +48,7 @@ from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabe
 from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
+from rosettalink.utils import parse_fasta_records
 from rosettalink.utils import resolve_rmsd_atoms
 from rosettalink.utils import setup_tracer
 
@@ -231,6 +237,7 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
         self,
         model="biohub/ESMFold2",
         device="cuda",
+        fasta="",
         num_loops="3",
         num_sampling_steps="50",
         num_diffusion_samples="1",
@@ -246,6 +253,7 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
 
         self.model_ = model
         self.device_ = device
+        self.fasta_ = fasta
         self.num_loops_ = num_loops
         self.num_sampling_steps_ = num_sampling_steps
         self.num_diffusion_samples_ = num_diffusion_samples
@@ -283,6 +291,7 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
         copy = ESMFold2()
         copy.model_ = self.model_
         copy.device_ = self.device_
+        copy.fasta_ = self.fasta_
         copy.num_loops_ = self.num_loops_
         copy.num_sampling_steps_ = self.num_sampling_steps_
         copy.num_diffusion_samples_ = self.num_diffusion_samples_
@@ -321,10 +330,16 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
         # as a complex rather than as one fused chain. Chain ids are assigned
         # A, B, C... in that same order, which keeps the residue numbering of
         # the prediction aligned with the input pose.
-        chains = [
-            {"id": chr(ord("A") + chain_index), "sequence": chain.sequence()}
-            for chain_index, chain in enumerate(pose.split_by_chain())
-        ]
+        #
+        # With fasta set, the sequences come from the file instead and the
+        # pose is only the vehicle for the first result.
+        if self.fasta_:
+            records = parse_fasta_records(self.fasta_)
+            self.tracer_info << (
+                f"Folding {len(records)} record(s) from {self.fasta_}\n"
+            ) and self.tracer_info.flush()
+        else:
+            records = [(None, [chain.sequence() for chain in pose.split_by_chain()])]
 
         options = {
             "num_loops": int(self.num_loops_),
@@ -341,42 +356,52 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
         # --- RUN ESMFOLD2 --- #
         model = load_model(self.model_, self.device_, self.tracer_info)
 
-        self.tracer_info << (
-            f"Folding {len(chains)} chain(s) with {options}\n"
-        ) and self.tracer_info.flush()
-        started = time.perf_counter()
-        samples = as_samples(fold(model, chains, options))
-        self.tracer_info << (
-            f"Folded {len(chains)} chain(s) into {len(samples)} sample(s) "
-            f"in {time.perf_counter() - started:.1f}s\n"
-        ) and self.tracer_info.flush()
-
         # --- OUTPUT STRUCTURES --- #
         # Written to disk before being read back, so the raw tool output of a
         # run stays available for inspection.
         designed_poses = []
-        for sample_index, sample in enumerate(samples):
-            text, suffix = structure_text(model, sample)
-            structure_file = run_dir / f"prediction_{sample_index}{suffix}"
-            structure_file.write_text(text)
+        for record_id, sequences in records:
+            chains = [
+                {"id": chr(ord("A") + chain_index), "sequence": sequence}
+                for chain_index, sequence in enumerate(sequences)
+            ]
+            label = f"{record_id} " if record_id else ""
 
-            scores = confidence_scores(sample)
-            confidence_file = run_dir / f"confidence_{sample_index}.json"
-            with open(confidence_file, "w") as f:
-                json.dump(scores, f, indent=2)
             self.tracer_info << (
-                f"Wrote {structure_file} and {confidence_file}\n"
+                f"Folding {label}({len(chains)} chain(s)) with {options}\n"
+            ) and self.tracer_info.flush()
+            started = time.perf_counter()
+            samples = as_samples(fold(model, chains, options))
+            self.tracer_info << (
+                f"Folded {label}into {len(samples)} sample(s) "
+                f"in {time.perf_counter() - started:.1f}s\n"
             ) and self.tracer_info.flush()
 
-            designed_poses.append(self._load_and_label_design(structure_file, scores, input_pose))
+            for sample_index, sample in enumerate(samples):
+                text, suffix = structure_text(model, sample)
+                stem = f"{record_id}_{sample_index}" if record_id else f"{sample_index}"
+                structure_file = run_dir / f"prediction_{stem}{suffix}"
+                structure_file.write_text(text)
+
+                scores = confidence_scores(sample)
+                confidence_file = run_dir / f"confidence_{stem}.json"
+                with open(confidence_file, "w") as f:
+                    json.dump(scores, f, indent=2)
+                self.tracer_info << (
+                    f"Wrote {structure_file} and {confidence_file}\n"
+                ) and self.tracer_info.flush()
+
+                designed_poses.append(
+                    self._load_and_label_design(structure_file, scores, input_pose, record_id)
+                )
 
         # Primary output: same convention as the other movers - the pose the
-        # caller already holds a reference to gets the first sample.
+        # caller already holds a reference to gets the first result.
         pose.assign(designed_poses[0])
 
-        # Every further sample (num_diffusion_samples > 1) is handed off
-        # through Mover::get_additional_output(), the standard Rosetta
-        # one-to-many mechanism, instead of being silently discarded.
+        # Every further result (more records, or num_diffusion_samples > 1)
+        # is handed off through Mover::get_additional_output(), the standard
+        # Rosetta one-to-many mechanism, instead of being silently discarded.
         self.additional_poses_ = list(designed_poses[1:])
 
         # --- CLEANUP --- #
@@ -406,11 +431,30 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
             pyrosetta.rosetta.core.import_pose.pose_from_file(pose, str(structure_file))
         return pose
 
-    def _load_and_label_design(self, structure_file, scores, input_pose):
+    def _load_and_label_design(self, structure_file, scores, input_pose, record_id=None):
         """Load one predicted structure, carry over reslabels from the input
         pose, attach its confidence scores, and compute any configured RMSD
         metrics. If replace_pose is false, the returned pose keeps the
-        original coordinates instead of the predicted ones."""
+        original coordinates instead of the predicted ones.
+
+        record_id marks a structure folded from a fasta record rather than
+        from the pose. Those have no correspondence to the input pose, so its
+        labels are not carried over and no RMSD is computed; the id is
+        recorded as the pose comment fasta_id."""
+        if record_id is not None:
+            pose = self._pose_from_structure_file(structure_file)
+            pyrosetta.rosetta.core.pose.add_comment(pose, "fasta_id", record_id)
+            for key, value in scores.items():
+                score_name = f"{self.prefix_name_}{key}"
+                setPoseExtraScore(pose, score_name, float(value))
+                self.tracer_info << f"\t{record_id} {score_name}: {value}\n" and self.tracer_info.flush()
+            if self.rmsd_metrics:
+                self.tracer_warning << (
+                    "Skipping RMSD metrics: structures folded from a fasta have no "
+                    "correspondence to the input pose\n"
+                ) and self.tracer_warning.flush()
+            return pose
+
         if self.replace_pose_:
             pose = self._pose_from_structure_file(structure_file)
             pdb_info_old = input_pose.pdb_info()
@@ -504,6 +548,7 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
         # optional attributes
         self.model_ = tag.get_option_string("model") if tag.hasOption("model") else "biohub/ESMFold2"
         self.device_ = tag.get_option_string("device") if tag.hasOption("device") else "cuda"
+        self.fasta_ = tag.get_option_string("fasta") if tag.hasOption("fasta") else ""
         self.num_loops_ = tag.get_option_string("num_loops") if tag.hasOption("num_loops") else "3"
         self.num_sampling_steps_ = tag.get_option_string("num_sampling_steps") if tag.hasOption("num_sampling_steps") else "50"
         self.num_diffusion_samples_ = tag.get_option_string("num_diffusion_samples") if tag.hasOption("num_diffusion_samples") else "1"
@@ -578,6 +623,11 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
             XMLSchemaType(xs_string),
             "Torch device the model is loaded onto. ESMFold2 expects a CUDA GPU; cpu is far slower",
             "cuda"))
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
+            "fasta",
+            XMLSchemaType(xs_string),
+            "Path to a fasta to fold instead of the pose sequence. Each record becomes one pose, with chains of one record separated by colons. The first result enters the pose and the rest come back through get_additional_output(); reslabels and RMSD metrics are skipped, and each pose carries its record id as the comment fasta_id",
+            ""))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "num_loops",
             XMLSchemaType(xs_string),

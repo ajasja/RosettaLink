@@ -18,6 +18,12 @@
 # Each chain of the pose is written as its own protein entry (ids A, B, C...
 # in pose order), so a complex is folded as a complex.
 #
+# fasta folds the records of a file instead of the pose sequence: one pose
+# per record, with chains of a record separated by colons. All records are
+# folded in one boltz invocation. Each pose carries its record id as the
+# comment fasta_id, and since these structures have no correspondence to the
+# input pose, reslabels and RMSD metrics are skipped.
+#
 # Confidence scores (confidence_score, ptm, iptm, complex_plddt,
 # complex_iplddt, complex_pde, complex_ipde) are reported on Boltz native
 # 0-1 scale under their own names, not rescaled to match AF2 pLDDT.
@@ -41,6 +47,7 @@ from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabe
 from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
+from rosettalink.utils import parse_fasta_records
 from rosettalink.utils import resolve_rmsd_atoms
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
@@ -53,6 +60,7 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         self,
         cmd_header=None,
         cache=None,
+        fasta="",
         use_msa_server="1",
         diffusion_samples="1",
         recycling_steps=None,
@@ -68,6 +76,7 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
 
         self.cmd_header_ = cmd_header
         self.cache_ = cache
+        self.fasta_ = fasta
         self.use_msa_server_ = use_msa_server
         self.diffusion_samples_ = diffusion_samples
         self.recycling_steps_ = recycling_steps
@@ -104,6 +113,7 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         copy = Boltz2()
         copy.cmd_header_ = self.cmd_header_
         copy.cache_ = self.cache_
+        copy.fasta_ = self.fasta_
         copy.use_msa_server_ = self.use_msa_server_
         copy.diffusion_samples_ = self.diffusion_samples_
         copy.recycling_steps_ = self.recycling_steps_
@@ -138,30 +148,47 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         input_pose = pose.clone()
 
         # --- INPUT YAML --- #
-        # A fixed entry name (rather than deriving one from the pose) keeps
-        # the output path fully predictable: out_dir/.../predictions/input/...
-        entry_name = "input"
-        yaml_path = run_dir / f"{entry_name}.yaml"
-        # One protein entry per chain, in pose order, so a complex is folded
-        # as a complex rather than as one fused chain. Chain ids are assigned
-        # A, B, C... in that same order, which keeps the residue numbering of
-        # the prediction aligned with the input pose.
-        chain_sequences = [chain.sequence() for chain in pose.split_by_chain()]
-        with open(yaml_path, "w") as f:
-            f.write("version: 1\n")
-            f.write("sequences:\n")
-            for chain_index, sequence in enumerate(chain_sequences):
-                f.write("  - protein:\n")
-                f.write(f"      id: {chr(ord('A') + chain_index)}\n")
-                f.write(f"      sequence: \"{sequence}\"\n")
-                if not self.use_msa_server_:
-                    # Single-sequence mode requires this sentinel, not just
-                    # omitting the msa field.
-                    f.write("      msa: empty\n")
-        self.tracer_info << f"Writing {len(chain_sequences)} chain(s) to {yaml_path}\n" and self.tracer_info.flush()
+        # One yaml per entry, each with one protein entry per chain, so a
+        # complex is folded as a complex rather than as one fused chain.
+        # Chain ids are assigned A, B, C... in that order, which keeps the
+        # residue numbering of the prediction aligned with the input pose.
+        #
+        # With fasta set the entries come from the file, one per record, and
+        # boltz is pointed at the directory holding them so all of them are
+        # folded in one invocation. Otherwise there is a single entry named
+        # input, taken from the pose.
+        if self.fasta_:
+            records = parse_fasta_records(self.fasta_)
+            input_path = run_dir / "inputs"
+            os.makedirs(input_path, exist_ok=True)
+            self.tracer_info << (
+                f"Folding {len(records)} record(s) from {self.fasta_}\n"
+            ) and self.tracer_info.flush()
+        else:
+            records = [("input", [chain.sequence() for chain in pose.split_by_chain()])]
+            input_path = run_dir / "input.yaml"
+
+        for entry_name, chain_sequences in records:
+            yaml_path = (
+                input_path / f"{entry_name}.yaml" if self.fasta_ else input_path
+            )
+            with open(yaml_path, "w") as f:
+                f.write("version: 1\n")
+                f.write("sequences:\n")
+                for chain_index, sequence in enumerate(chain_sequences):
+                    f.write("  - protein:\n")
+                    f.write(f"      id: {chr(ord('A') + chain_index)}\n")
+                    f.write(f"      sequence: \"{sequence}\"\n")
+                    if not self.use_msa_server_:
+                        # Single-sequence mode requires this sentinel, not
+                        # just omitting the msa field.
+                        f.write("      msa: empty\n")
+            self.tracer_info << (
+                f"Writing {len(chain_sequences)} chain(s) to {yaml_path}\n"
+            ) and self.tracer_info.flush()
 
         # --- RUN BOLTZ --- #
-        boltz_cmd_str = f"{self.cmd_header_} {yaml_path} --out_dir {run_dir} --output_format pdb"
+        boltz_cmd_str = f"{self.cmd_header_} {input_path} --out_dir {run_dir} --output_format pdb"
         if self.cache_:
             boltz_cmd_str += f" --cache {self.cache_}"
         if self.use_msa_server_:
@@ -181,13 +208,28 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         # --- OUTPUT PDBS --- #
         # Glob for **/predictions/... rather than a fixed path, since boltz
         # nests predictions/ under an extra directory of its own choosing.
-        pdb_files = sorted(run_dir.glob(f"**/predictions/{entry_name}/{entry_name}_model_*.pdb"))
-        if not pdb_files:
-            self.tracer_error << f"No boltz output pdb files found under {run_dir}\n" and self.tracer_error.flush()
-            raise RuntimeError(f"No boltz output pdb files found under {run_dir}")
-        self.tracer_info << f"Boltz output pdb files found: {[str(p) for p in pdb_files]}\n" and self.tracer_info.flush()
-
-        designed_poses = [self._load_and_label_design(pdb_file, input_pose) for pdb_file in pdb_files]
+        # Entries are walked in input order so the poses come back in the
+        # order the records were given.
+        designed_poses = []
+        for entry_name, _ in records:
+            pdb_files = sorted(
+                run_dir.glob(f"**/predictions/{entry_name}/{entry_name}_model_*.pdb")
+            )
+            if not pdb_files:
+                self.tracer_error << (
+                    f"No boltz output pdb files found for {entry_name} under {run_dir}\n"
+                ) and self.tracer_error.flush()
+                raise RuntimeError(
+                    f"No boltz output pdb files found for {entry_name} under {run_dir}"
+                )
+            self.tracer_info << (
+                f"Boltz output pdb files for {entry_name}: {[str(p) for p in pdb_files]}\n"
+            ) and self.tracer_info.flush()
+            record_id = entry_name if self.fasta_ else None
+            designed_poses.extend(
+                self._load_and_label_design(pdb_file, input_pose, record_id)
+                for pdb_file in pdb_files
+            )
 
         # Primary output: same convention as RFDiffusion/LigandMPNN - the
         # pose the caller already holds a reference to gets the first design.
@@ -209,11 +251,43 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         except Exception:
             self.tracer_error << f"Failed to clean up run directory: {run_dir}\n" and self.tracer_error.flush()
 
-    def _load_and_label_design(self, pdb_file, input_pose):
+    def _attach_confidence(self, pose, pdb_file, record_id=None):
+        """Reads the confidence json boltz writes beside pdb_file and
+        attaches its scores to the pose under prefix_name."""
+        confidence_path = pdb_file.parent / f"confidence_{pdb_file.stem}.json"
+        if not confidence_path.is_file():
+            self.tracer_warning << f"No confidence json found at {confidence_path}\n" and self.tracer_warning.flush()
+            return
+        with open(confidence_path, "r") as f:
+            confidence = json.load(f)
+        label = f"{record_id} " if record_id else ""
+        for key in ("confidence_score", "ptm", "iptm", "complex_plddt", "complex_iplddt", "complex_pde", "complex_ipde"):
+            if key in confidence:
+                score_name = f"{self.prefix_name_}{key}"
+                setPoseExtraScore(pose, score_name, float(confidence[key]))
+                self.tracer_info << f"\t{label}{score_name}: {confidence[key]}\n" and self.tracer_info.flush()
+
+    def _load_and_label_design(self, pdb_file, input_pose, record_id=None):
         """Load a single boltz-predicted .pdb, carry over reslabels from the
         input pose, attach confidence scores, and compute any configured
         RMSD metrics. If replace_pose is false, the returned pose keeps the
-        original coordinates instead of the boltz-predicted ones."""
+        original coordinates instead of the boltz-predicted ones.
+
+        record_id marks a structure folded from a fasta record rather than
+        from the pose. Those have no correspondence to the input pose, so its
+        labels are not carried over and no RMSD is computed; the id is
+        recorded as the pose comment fasta_id."""
+        if record_id is not None:
+            pose = pyrosetta.pose_from_file(str(pdb_file))
+            pyrosetta.rosetta.core.pose.add_comment(pose, "fasta_id", record_id)
+            self._attach_confidence(pose, pdb_file, record_id)
+            if self.rmsd_metrics:
+                self.tracer_warning << (
+                    "Skipping RMSD metrics: structures folded from a fasta have no "
+                    "correspondence to the input pose\n"
+                ) and self.tracer_warning.flush()
+            return pose
+
         if self.replace_pose_:
             pose = pyrosetta.pose_from_file(str(pdb_file))
             pdb_info_old = input_pose.pdb_info()
@@ -226,17 +300,7 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
             pose = input_pose.clone()
 
         # --- CONFIDENCE SCORES --- #
-        confidence_path = pdb_file.parent / f"confidence_{pdb_file.stem}.json"
-        if confidence_path.is_file():
-            with open(confidence_path, "r") as f:
-                confidence = json.load(f)
-            for key in ("confidence_score", "ptm", "iptm", "complex_plddt", "complex_iplddt", "complex_pde", "complex_ipde"):
-                if key in confidence:
-                    score_name = f"{self.prefix_name_}{key}"
-                    setPoseExtraScore(pose, score_name, float(confidence[key]))
-                    self.tracer_info << f"\t{score_name}: {confidence[key]}\n" and self.tracer_info.flush()
-        else:
-            self.tracer_warning << f"No confidence json found at {confidence_path}\n" and self.tracer_warning.flush()
+        self._attach_confidence(pose, pdb_file)
 
         # --- RMSD METRICS --- #
         for rmsd in self.rmsd_metrics:
@@ -312,6 +376,7 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
 
         # optional attributes
         self.cache_ = tag.get_option_string("cache") if tag.hasOption("cache") else ""
+        self.fasta_ = tag.get_option_string("fasta") if tag.hasOption("fasta") else ""
         self.use_msa_server_ = tag.get_option_bool("use_msa_server") if tag.hasOption("use_msa_server") else True
         self.diffusion_samples_ = tag.get_option_string("diffusion_samples") if tag.hasOption("diffusion_samples") else "1"
         self.recycling_steps_ = tag.get_option_string("recycling_steps") if tag.hasOption("recycling_steps") else ""
@@ -380,6 +445,11 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
             "cache",
             XMLSchemaType(xs_string),
             "Path to the boltz cache/model-weights directory (--cache). If not provided, the boltz default (~/.boltz) is used",
+            ""))
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
+            "fasta",
+            XMLSchemaType(xs_string),
+            "Path to a fasta to fold instead of the pose sequence. Each record becomes one pose, with chains of one record separated by colons, and all records are folded in one invocation. The first result enters the pose and the rest come back through get_additional_output(); reslabels and RMSD metrics are skipped, and each pose carries its record id as the comment fasta_id",
             ""))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "use_msa_server",
