@@ -65,9 +65,9 @@ from rosettalink.utils import drain_additional_output
 # installation here; they are substituted into the mover tags in
 # PIPELINE_XML_TEMPLATE below.
 # --------------------------------------------------------------------------- #
-RFDIFFUSION_SIF = "/path/to/rfdiff.sif"
-LIGANDMPNN_SIF = "/path/to/ligandmpnn.sif"
-COLABFOLD_SIF = "/path/to/colabfold.sif"
+RFDIFFUSION_SIF = "/home/folivieri/prosculpt/singularity_files/rfdiff.sif"
+LIGANDMPNN_SIF = "/home/folivieri/prosculpt/singularity_files/ligandmpnn.sif"
+COLABFOLD_SIF = "/home/folivieri/prosculpt/singularity_files/colabfold.sif"
 COLABFOLD_CMD_HEADER = f"singularity run --nv {COLABFOLD_SIF} colabfold_batch"
 
 NUM_BACKBONES = 2              # RFDiffusion num_designs
