@@ -1,4 +1,7 @@
 import os
+import re
+
+import pyrosetta
 from pyrosetta.rosetta.basic import Tracer, TracerPriority
 
 def run_and_log(command, tracer_info, tracer_error):
@@ -72,3 +75,50 @@ def parse_fasta_records(fasta_path, chain_separator=":"):
     if not records:
         raise RuntimeError(f"No sequences found in {fasta_path}")
     return records
+
+
+def drain_additional_output(mover):
+    """Collects every pose a one-to-many mover produced beyond the one
+    already sitting in the pose apply() was given.
+
+    Mover::get_additional_output() returns a single pose per call and None
+    once there are none left, so it has to be called in a loop rather than
+    wrapped in list(...)."""
+    poses = []
+    while True:
+        extra_pose = mover.get_additional_output()
+        if extra_pose is None:
+            break
+        poses.append(extra_pose)
+    return poses
+
+
+# Short names accepted by the atoms="..." attribute of an <RMSD> tag, mapped
+# onto the core::scoring::rmsd_atoms enum values they stand for.
+RMSD_ATOM_SETS = {
+    "ca": "rmsd_protein_bb_ca",                          # alpha carbons only
+    "bb": "rmsd_protein_bb_heavy",                       # N, CA, C
+    "bb_o": "rmsd_protein_bb_heavy_including_O",         # N, CA, C, O
+    "heavy": "rmsd_all_heavy",                           # backbone + sidechains, no hydrogens
+    "all": "rmsd_all",                                   # every atom, hydrogens included
+    "sc": "rmsd_sc",                                     # sidechains only
+    "sc_heavy": "rmsd_sc_heavy",                         # sidechains only, no hydrogens
+}
+
+
+def resolve_rmsd_atoms(atoms):
+    """Turns the atoms="..." value of an <RMSD> tag into an rmsd_atoms enum
+    value for RMSDMetric::set_rmsd_type().
+
+    Accepts the short names in RMSD_ATOM_SETS ("ca", "heavy", ...) or a
+    core::scoring::rmsd_atoms name ("rmsd_protein_bb_ca", ...) directly. The
+    chosen atom set governs the superposition as well as the measurement."""
+    rmsd_atoms = pyrosetta.rosetta.core.scoring.rmsd_atoms
+    requested = atoms.strip()
+    enum_name = RMSD_ATOM_SETS.get(requested.lower(), requested)
+    if not hasattr(rmsd_atoms, enum_name):
+        raise ValueError(
+            f'Unknown atoms="{atoms}". Use one of {sorted(RMSD_ATOM_SETS)} '
+            f"or a core::scoring::rmsd_atoms name."
+        )
+    return getattr(rmsd_atoms, enum_name)

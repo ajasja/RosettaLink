@@ -67,7 +67,7 @@ NUM_BINDERS = 2                # RFDiffusion num_designs
 NUM_SEQUENCES_PER_BINDER = 2   # LigandMPNN batch_size (per backbone)
 CONTIG = "[B1-150/0 90-120]"   # target chain B kept whole, then a de novo binder
 
-OUTPUT_DIR = Path(os.environ.get("PIPELINE_OUTPUT_DIR", "pipeline_binder_output_esm_2")).resolve()
+OUTPUT_DIR = Path(os.environ.get("PIPELINE_OUTPUT_DIR", "pipeline_binder_output_esm_3")).resolve()
 METRICS_CSV = OUTPUT_DIR / "metrics.csv"
 
 # --------------------------------------------------------------------------- #

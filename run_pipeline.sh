@@ -26,9 +26,11 @@ mkdir -p logs
 # `set -e` above, that failure was silent: the job went on to run whatever
 # `python` was first on PATH (miniforge3's base env) instead of `rosettalink`.
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate rosettalink
+conda activate /home/folivieri/miniforge3/envs/rosettalink
 
 echo "python: $(which python)"
 echo "rosettalink: $(python -c 'import rosettalink, os; print(os.path.dirname(rosettalink.__file__))')"
-
-python examples/demo_full_pipeline.py
+export HF_HOME=/home/folivieri/.cache/huggingface # This prevents someone else from downloading 24GB of ESM-IF1 weights again.
+export HF_HUB_OFFLINE=1
+export PIPELINE_OUTPUT_DIR=output/$SLURM_JOB_ID
+python /home/folivieri/RosettaLink/examples/demo_full_pipeline_ESM_binderDesign.py
