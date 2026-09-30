@@ -11,7 +11,7 @@ LigandMPNN:
 ColabFold:
 	run_command: >-
 		/home/aljubetic/AF2/CF2.3/colabfold-conda/bin/python
-		/home/aljubetic/AF2/CF2.3/colabfold-conda/bin/colabfold_batch
+		/home/aljubetic/AF2/CF2.3/colabfold-conda/bin/colabfold_batch --data /home/aljubetic/.cache/colabfold/params
 
 Boltz2:
 	run_command: null
