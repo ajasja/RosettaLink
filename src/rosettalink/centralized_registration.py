@@ -12,6 +12,10 @@ REGISTRATION_MODULES = {
     'movers': [
         'RFDiffusion',
         'LigandMPNN',
+        'ColabFold',
+        'Boltz2',
+        'ESMFold2',
+        'HBDesigner',
     ],
 }
 

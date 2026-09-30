@@ -12,6 +12,7 @@ readme = "README.md"
 dependencies = [
     #"pyrosetta>=2025.47",
     "pyrosetta",
+    "biopython",
 ]
 
 [tool.setuptools]

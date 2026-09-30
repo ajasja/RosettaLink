@@ -1,4 +1,4 @@
-# @file movers/HelloWorldMover2.py
+# @file movers/HelloWorldMover.py
 # @brief Basic example of how to implement a Mover in python.
 # @author Moritz Ertelt
 
@@ -6,7 +6,7 @@ import pyrosetta
 from rosettalink.decorators import register_mover
 
 
-class HelloWorldMover2(pyrosetta.rosetta.protocols.moves.Mover):
+class HelloWorldMover(pyrosetta.rosetta.protocols.moves.Mover):
     clones_ = list()
 
     def __init__(self):
@@ -14,9 +14,9 @@ class HelloWorldMover2(pyrosetta.rosetta.protocols.moves.Mover):
         self.message_ = None
 
     def clone(self):
-        copy = HelloWorldMover2()
+        copy = HelloWorldMover()
         copy.message_ = self.message_
-        HelloWorldMover2.clones_.append(copy)
+        HelloWorldMover.clones_.append(copy)
         return copy
 
     def apply(self, pose):
@@ -31,7 +31,7 @@ class HelloWorldMover2(pyrosetta.rosetta.protocols.moves.Mover):
 
     @staticmethod
     def mover_name():
-        return "HelloWorldMover2"
+        return "HelloWorldMover"
 
     @classmethod
     def provide_xml_schema(cls, xsd):
@@ -56,20 +56,19 @@ class HelloWorldMover2(pyrosetta.rosetta.protocols.moves.Mover):
 
 
 @register_mover
-class HelloWorldMover2Creator(pyrosetta.rosetta.protocols.moves.MoverCreator):
+class HelloWorldMoverCreator(pyrosetta.rosetta.protocols.moves.MoverCreator):
     instances_ = list()
 
     def __init__(self):
         pyrosetta.rosetta.protocols.moves.MoverCreator.__init__(self)
 
     def create_mover(self):
-        mover = HelloWorldMover2()
+        mover = HelloWorldMover()
         self.instances_.append(mover)
         return mover
 
     def keyname(self):
-        return HelloWorldMover2.mover_name()
+        return HelloWorldMover.mover_name()
 
     def provide_xml_schema(self, xsd):
-        HelloWorldMover2.provide_xml_schema(xsd)
-
+        HelloWorldMover.provide_xml_schema(xsd)

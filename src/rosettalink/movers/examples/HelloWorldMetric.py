@@ -77,5 +77,3 @@ class HelloWorldMetricCreator(pyrosetta.rosetta.core.simple_metrics.SimpleMetric
 
     def provide_xml_schema(self, xsd):
         HelloWorldMetric.provide_xml_schema(xsd)
-
-

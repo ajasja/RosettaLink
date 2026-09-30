@@ -205,3 +205,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# RosettaLink pipeline run artifacts (SLURM logs, generated structures)
+/logs/
+/outputs/
+/output/
+/pipeline_output/
+/pipeline_output_xml/
