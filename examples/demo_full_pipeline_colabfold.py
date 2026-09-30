@@ -68,14 +68,14 @@ from rosettalink.utils import drain_additional_output
 RFDIFFUSION_SIF = "/home/folivieri/prosculpt/singularity_files/rfdiff.sif"
 LIGANDMPNN_SIF = "/home/folivieri/prosculpt/singularity_files/ligandmpnn.sif"
 COLABFOLD_SIF = "/home/folivieri/prosculpt/singularity_files/colabfold.sif"
-COLABFOLD_CMD_HEADER = f"singularity run --nv {COLABFOLD_SIF} colabfold_batch"
+COLABFOLD_CMD_HEADER = f"/home/aljubetic/AF2/CF2.3/colabfold-conda/bin/colabfold_batch"
 
 NUM_BACKBONES = 2              # RFDiffusion num_designs
 NUM_SEQUENCES_PER_BACKBONE = 3 # LigandMPNN batch_size (per backbone)
 BACKBONE_LENGTH = 60           # residues; unconditional design (no motif)
 CONTIG = f"[{BACKBONE_LENGTH}-{BACKBONE_LENGTH}]"
 
-OUTPUT_DIR = Path(os.environ.get("PIPELINE_OUTPUT_DIR", "pipeline_output_single_xml_extended")).resolve()
+OUTPUT_DIR = Path(os.environ.get("PIPELINE_OUTPUT_DIR", "out/pipeline_output_single_xml_extended")).resolve()
 METRICS_CSV = OUTPUT_DIR / "metrics.csv"
 
 # --------------------------------------------------------------------------- #
