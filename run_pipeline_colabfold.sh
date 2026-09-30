@@ -6,7 +6,7 @@
 #SBATCH --output=logs/slurm-%A_%a_%x.out
 #SBATCH --error=logs/slurm-%A_%a_%x.err
 
-set -euo pipefail
+#set -euo pipefail
 
 # Relative paths resolve against the directory sbatch was invoked from.
 cd "$SLURM_SUBMIT_DIR"
@@ -17,6 +17,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 
 # ColabFold runs from a singularity image, so this env needs only PyRosetta.
 CONDA_ENV=${CONDA_ENV:-/home/folivieri/miniforge3/envs/rosettalink}
+
 conda activate "$CONDA_ENV"
 
 echo "python: $(which python)"
