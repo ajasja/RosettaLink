@@ -15,7 +15,7 @@ movers actually do, and how to stay backwards compatible.
 
 Read the existing movers alongside this doc - they are the worked examples
 every section refers back to:
-- src/rosettalink/movers/RFDiffusion.py - backbone generation
+- src/rosettalink/movers/RFdiffusion.py - backbone generation
 - src/rosettalink/movers/LigandMPNN.py - sequence design
 - src/rosettalink/movers/ColabFold.py - structure prediction
 - src/rosettalink/movers/Boltz2.py - structure prediction, multi-chain
@@ -219,10 +219,10 @@ mover object every iteration will never catch this bug.
 
 If the mover also writes its own input pdb into the same directory the
 external tool writes its output into, a bare glob('*.pdb') will pick that
-up too. Do not rely on filename or sort-order to exclude it (RFDiffusion
+up too. Do not rely on filename or sort-order to exclude it (RFdiffusion
 input.pdb happened to sort after its own numbered outputs, which is a
 coincidence, not a rule). Instead key off whatever the tool own output
-convention actually is - e.g. RFDiffusion only writes a .trb file next to
+convention actually is - e.g. RFdiffusion only writes a .trb file next to
 genuine designs:
 
 ```python
@@ -326,7 +326,7 @@ ColabFold both do exactly this.)
 Always also stamp a label spanning every residue (RosettaLink convention is
 "all"), in addition to whatever conditional/subset labels the tool own
 output implies. A conditional label can legitimately be empty - e.g.
-RFDiffusion inpaint_seq/inpaint_str labels mark residues kept from an
+RFdiffusion inpaint_seq/inpaint_str labels mark residues kept from an
 input, which is nothing at all for a fully unconditional design - and
 downstream consumers (e.g. an RMSD metric that needs the whole chain) have
 no fallback if the only label available to select on selects zero
@@ -347,7 +347,7 @@ For the labels the current movers actually use, see section 10.
 
 ## 4. One-to-many movers: get_additional_output()
 
-If a tool can produce more than one result per call (RFDiffusion
+If a tool can produce more than one result per call (RFdiffusion
 num_designs, LigandMPNN batch_size), do not just keep the first result and
 discard the rest. Implement get_additional_output() - the standard Rosetta
 mechanism for "one apply(), many poses" - so every consumer (plain Python,
@@ -414,7 +414,7 @@ the RosettaScripts wiki page for it):
 
 ```xml
 <MOVERS>
-    <RFDiffusion name="make_backbone" num_designs="2" .../>
+    <RFdiffusion name="make_backbone" num_designs="2" .../>
 
     <MultiplePoseMover name="design_sequences">
         <ROSETTASCRIPTS>
@@ -700,7 +700,7 @@ These roles are positions in the pipeline. A mover wrapping a tool that
 occupies no position has no contract to satisfy beyond the mover skeleton in
 Part 1 - there is nothing further to look up here.
 
-### Backbone generation (the RFDiffusion role)
+### Backbone generation (the RFdiffusion role)
 
 - Number of designs is a mover attribute, not repeated apply() calls. First
   design goes into the pose that was handed in, the rest through
@@ -751,16 +751,16 @@ obvious from the code.
 
 | mover | role | reached as | fan-out attribute | score prefix convention |
 |---|---|---|---|---|
-| RFDiffusion | backbone generation | subprocess, `rfdiffusion_path` | `num_designs` | n/a, writes labels not scores |
+| RFdiffusion | backbone generation | subprocess, `rfdiffusion_path` | `num_designs` | n/a, writes labels not scores |
 | LigandMPNN | sequence design | subprocess, `ligandmpnn_path` | `batch_size` (x `number_of_batches`) | n/a |
 | ColabFold | structure prediction | subprocess, `cmd_header` | none (one model per call) | `prefix_name`, default `AF2_` |
 | Boltz2 | structure prediction | subprocess, `cmd_header` | `diffusion_samples` | `prefix_name`, default `Boltz_` |
 | ESMFold2 | structure prediction | in process | `num_diffusion_samples` | `prefix_name`, default `ESMFold2_` |
 | HBDesigner | none (fixed backbone redesign) | subprocess, `cmd_header` | `top_k`, ranked best first | `prefix_name`, default `HBDesigner_` |
 
-### RFDiffusion: the labels it stamps
+### RFdiffusion: the labels it stamps
 
-`RFDiffusion._load_and_label_design` puts these on every design, and
+`RFdiffusion._load_and_label_design` puts these on every design, and
 everything downstream selects on them via
 `ResiduePDBInfoHasLabelSelector`. Any label matching nothing is omitted:
 
@@ -781,7 +781,7 @@ Note `inpainted` is the near-inverse of `inpaint_seq`, which marks
 identities that were KEPT; the names are one letter apart and mean opposite
 things.
 
-### RFDiffusion: reading .trb indices
+### RFdiffusion: reading .trb indices
 
 The `.trb` sidecar is a pickle of numpy arrays. Inspect one directly when
 adding or debugging labels - it needs only pickle and numpy, no PyRosetta:

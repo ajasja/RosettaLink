@@ -1,5 +1,5 @@
-# @file movers/RFDiffusion.py
-# @brief Rosetta mover to run RFDiffusion
+# @file movers/RFdiffusion.py
+# @brief Rosetta mover to run RFdiffusion
 
 import os
 import shutil
@@ -18,7 +18,7 @@ import pickle
 import numpy as np
 
 
-class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
+class RFdiffusion(pyrosetta.rosetta.protocols.moves.Mover):
     clones_ = list()
 
     def __init__(self, contig=None, num_designs=None, rfdiffusion_path=None, extra_args=None, work_dir=None, delete_dir=None):
@@ -34,19 +34,19 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         # standard Mover::get_additional_output() one-to-many mechanism.
         self.additional_poses_ = None
 
-        self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, self.tracer_debug, self.tracer_trace, *_ = setup_tracer("[RFDiffusion]")
+        self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, self.tracer_debug, self.tracer_trace, *_ = setup_tracer("[RFdiffusion]")
 
         self.tracer_info << f"Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_} \n" and self.tracer_info.flush()
 
     def clone(self):
-        copy = RFDiffusion()
+        copy = RFdiffusion()
         copy.contig_ = self.contig_
         copy.num_designs_ = self.num_designs_
         copy.rfdiffusion_path_ = self.rfdiffusion_path_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
         copy.delete_dir_ = self.delete_dir_
-        RFDiffusion.clones_.append(copy)
+        RFdiffusion.clones_.append(copy)
         return copy
 
     def apply(self, pose):
@@ -78,7 +78,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             -cd /output"   # IMPORTANT: Needs to be within container (with leading slash): self.work_dir_ => /output/
             
         run_and_log(rfdiff_cmd_str, self.tracer_info, self.tracer_error)
-        # RFDiffusion writes a .trb next to every design, and the input pose
+        # RFdiffusion writes a .trb next to every design, and the input pose
         # was dumped into this same directory, so key off the .trb rather
         # than picking up input.pdb as if it were a design.
         output_dir = run_dir
@@ -116,7 +116,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             self.tracer_debug << f"Failed to clean up {run_dir} \n" and self.tracer_debug.flush()
 
     def _load_and_label_design(self, pdb_file):
-        """Load a single RFDiffusion output .pdb and stamp it with the same
+        """Load a single RFdiffusion output .pdb and stamp it with the same
         inpaint_seq/inpaint_str pose-cache subsets and pdb_info reslabels that
         the rest of the suite (selectors, downstream movers/filters) expects,
         regardless of whether this design ends up as the primary output pose
@@ -201,7 +201,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         return self.mover_name()
 
     def parse_my_tag(self, tag, data):
-        self.tracer_debug << f"Parsing my tag @ RFDiffusion. Self: {self}, tag: {tag}, data: {data} \n" and self.tracer_debug.flush()
+        self.tracer_debug << f"Parsing my tag @ RFdiffusion. Self: {self}, tag: {tag}, data: {data} \n" and self.tracer_debug.flush()
         self.contig_ = tag.get_option_string("contig")
         self.num_designs_ = tag.get_option_int("num_designs")
         self.rfdiffusion_path_ = tag.get_option_string("rfdiffusion_path")
@@ -215,7 +215,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
 
     @staticmethod
     def mover_name():
-        return "RFDiffusion"
+        return "RFdiffusion"
 
     @classmethod
     def provide_xml_schema(cls, xsd):
@@ -234,16 +234,16 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         attrlist.append(XMLSchemaAttribute.required_attribute(
             "rfdiffusion_path",
             XMLSchemaType(xs_string),
-            "Path to the RFDiffusion executable or Docker image"))
+            "Path to the RFdiffusion executable or Docker image"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "extra_args",
             XMLSchemaType(xs_string),
-            "Extra arguments for the RFDiffusion executable, e.g. diffuser.T=99999",
+            "Extra arguments for the RFdiffusion executable, e.g. diffuser.T=99999",
             ""))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "work_dir",
             XMLSchemaType(xs_string),
-            "Directory where the RFDiffusion output will be stored. If attribute not provided, a new tempfile.TemporaryDirectory will be used. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
+            "Directory where the RFdiffusion output will be stored. If attribute not provided, a new tempfile.TemporaryDirectory will be used. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
             ""))
         attrlist.append(XMLSchemaAttribute.required_attribute(
             "delete_dir",
@@ -251,7 +251,7 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             "Whether to delete the work directory after the run (after every design has been read from disk into the primary pose or the additional-output poses)"))
 
         description = '''
-                        Runs RFDiffusion to generate backbone designs.
+                        Runs RFdiffusion to generate backbone designs.
                       '''
 
         pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes(
@@ -261,20 +261,20 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
 
 
 @register_mover
-class RFDiffusionCreator(pyrosetta.rosetta.protocols.moves.MoverCreator):
+class RFdiffusionCreator(pyrosetta.rosetta.protocols.moves.MoverCreator):
     instances_ = list()
 
     def __init__(self):
         pyrosetta.rosetta.protocols.moves.MoverCreator.__init__(self)
 
     def create_mover(self):
-        mover = RFDiffusion()
+        mover = RFdiffusion()
         self.instances_.append(mover)
         return mover
 
     def keyname(self):
-        return RFDiffusion.mover_name()
+        return RFdiffusion.mover_name()
 
     def provide_xml_schema(self, xsd):
-        RFDiffusion.provide_xml_schema(xsd)
+        RFdiffusion.provide_xml_schema(xsd)
 

@@ -22,7 +22,7 @@ xml_string = """
     </RESIDUE_SELECTORS>
 
     <MOVERS>
-        <RFDiffusion name="make_backbone" contig="[3-4/0 5-6/A1-10/3/A15-16/2-2/0 A17-20]" num_designs="1" rfdiffusion_path="/ceph/hpc/home/olivierif/prosculpt/sif_files/rfdiff.sif" extra_args="inference.input_pdb=/output/input.pdb contigmap.inpaint_seq=[A5-18]" delete_dir="true" work_dir="TESTNIDIRIRinpaintMASKED" />
+        <RFdiffusion name="make_backbone" contig="[3-4/0 5-6/A1-10/3/A15-16/2-2/0 A17-20]" num_designs="1" rfdiffusion_path="/ceph/hpc/home/olivierif/prosculpt/sif_files/rfdiff.sif" extra_args="inference.input_pdb=/output/input.pdb contigmap.inpaint_seq=[A5-18]" delete_dir="true" work_dir="TESTNIDIRIRinpaintMASKED" />
         <MutateResidue name="mutate_residue" residue_selector="get_de_novo_residues" new_res="ASP" preserve_atom_coords="false" mutate_self="false" />
         <MutateResidue name="mutate_template" residue_selector="get_not_de_novo_residues" new_res="GLU" preserve_atom_coords="false" mutate_self="false" />
     </MOVERS>       
@@ -63,7 +63,7 @@ xml_string2 = """
     </SIMPLE_METRICS>    
 
     <MOVERS>
-        <RFDiffusion name="make_backbone" contig="[7-20]" num_designs="1" rfdiffusion_path="/home/folivieri/prosculpt/singularity_files/rfdiff.sif" delete_dir="true" />
+        <RFdiffusion name="make_backbone" contig="[7-20]" num_designs="1" rfdiffusion_path="/home/folivieri/prosculpt/singularity_files/rfdiff.sif" delete_dir="true" />
     </MOVERS>       
 
     <PROTOCOLS>

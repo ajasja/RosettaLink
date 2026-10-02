@@ -116,7 +116,7 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
         self.delete_dir_ = delete_dir
         # Populated by apply(): every designed sequence beyond the first,
         # exposed via the standard Mover::get_additional_output() mechanism -
-        # same one-to-many pattern as RFDiffusion.
+        # same one-to-many pattern as RFdiffusion.
         self.additional_poses_ = []
 
         self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, \

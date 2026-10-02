@@ -22,7 +22,7 @@ xml_string = """
     </RESIDUE_SELECTORS>
 
     <MOVERS>
-        <RFDiffusion name="make_backbone" contig="[3-4/0 5-6/A1-10/3/A15-16/2-2/0 A17-20]" num_designs="3" rfdiffusion_path="/home/folivieri/prosculpt/singularity_files/rfdiff.sif" extra_args="inference.input_pdb=/output/input.pdb contigmap.inpaint_seq=[A5-18]" delete_dir="true" work_dir="TESTNIDIRveč" />
+        <RFdiffusion name="make_backbone" contig="[3-4/0 5-6/A1-10/3/A15-16/2-2/0 A17-20]" num_designs="3" rfdiffusion_path="/home/folivieri/prosculpt/singularity_files/rfdiff.sif" extra_args="inference.input_pdb=/output/input.pdb contigmap.inpaint_seq=[A5-18]" delete_dir="true" work_dir="TESTNIDIRveč" />
         <LigandMPNN name="make_sequence" ligandmpnn_path="/home/zznidar/ligandmpnn/ligandmpnn.sif" delete_dir="true" work_dir="TESTNIDIRveč" />
     </MOVERS>       
 
