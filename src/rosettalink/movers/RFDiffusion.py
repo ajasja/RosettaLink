@@ -8,7 +8,6 @@ import pyrosetta
 from rosettalink.decorators import register_mover
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
-from pyrosetta.rosetta.protocols.residue_selectors import StoreResidueSubsetMover
 from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector, FalseResidueSelector
 
 
@@ -178,7 +177,6 @@ class RFdiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         # ResiduePDBInfoHasLabelSelector. A label matching no residue is left
         # off entirely rather than stamped as empty.
         for label, resnums in labelled:
-            StoreResidueSubsetMover(resnum_selector(resnums), label, True).apply(pose)
             if not resnums:
                 continue
             for resnum in sorted(resnums):
