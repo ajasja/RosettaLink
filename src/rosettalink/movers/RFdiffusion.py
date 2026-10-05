@@ -8,6 +8,7 @@ import pyrosetta
 from rosettalink.decorators import register_mover
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
+import rosettalink.movers.BaseLinkMover as BaseLinkMover
 from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector, FalseResidueSelector
 
 
@@ -17,7 +18,7 @@ import pickle
 import numpy as np
 
 
-class RFdiffusion(pyrosetta.rosetta.protocols.moves.Mover):
+class RFdiffusion(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
     def __init__(self, contig=None, num_designs=None, rfdiffusion_path=None, extra_args=None, work_dir=None, delete_dir=None):
@@ -48,39 +49,34 @@ class RFdiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         RFdiffusion.clones_.append(copy)
         return copy
 
-    def apply(self, pose):
-        # Fresh, self-cleaning temp directory every call (or a fresh
-        # subdirectory of a configured work_dir) - never stored back onto
-        # self.work_dir_, so this mover instance can safely be applied more
-        # than once (e.g. from a RosettaScripts MultiplePoseMover).
-        if self.work_dir_ is None or self.work_dir_ == "":
-            temp_dir = tempfile.TemporaryDirectory()
-            run_dir = Path(temp_dir.name)
-            self.tracer_info << f"No work directory specified, using temporary directory: {run_dir} \n" and self.tracer_info.flush()
-        else:
-            temp_dir = None
-            os.makedirs(self.work_dir_, exist_ok=True)
-            run_dir = Path(tempfile.mkdtemp(dir=self.work_dir_))
-        os.makedirs(run_dir/'schedules', exist_ok=True)
+    def apply_in_dir(self, pose):
+        # We are already in tmp_dir (run_dir) at this point.
+        run_dir = self.run_dir # Obtained from parent BaseClassMover
+        self.tracer_info << f"We are using temporary directory: {run_dir} \n" and self.tracer_info.flush()
+
+        self.tracer_info << f"Current working directory: {os.getcwd()} \n" and self.tracer_info.flush()
+
+        os.makedirs("output", exist_ok=True)
+        os.makedirs("output/schedules", exist_ok=True)
 
         # Save input pose to run_dir, so we can input it into RfDiff
-        pyrosetta.dump_pdb(pose, str(run_dir/'input.pdb'))
+        pyrosetta.dump_pdb(pose, str('input.pdb'))
+
 
         rfdiff_cmd_str = f"singularity run --nv \
-            -B {run_dir}:/output \
             {self.rfdiffusion_path_} \
-            inference.schedule_directory_path=/output/schedules \
-            inference.output_prefix=/output/ \
+            inference.schedule_directory_path=output/schedules \
+            inference.output_prefix=output/ \
             'contigmap.contigs={self.contig_}' \
             inference.num_designs={self.num_designs_} \
             {self.extra_args_ if self.extra_args_ else ''} \
-            -cd /output"   # IMPORTANT: Needs to be within container (with leading slash): self.work_dir_ => /output/
+            -cd output"   # IMPORTANT: Needs to be outside container (without leading slash)
             
         run_and_log(rfdiff_cmd_str, self.tracer_info, self.tracer_error)
         # RFdiffusion writes a .trb next to every design, and the input pose
         # was dumped into this same directory, so key off the .trb rather
         # than picking up input.pdb as if it were a design.
-        output_dir = run_dir
+        output_dir = Path("output")
         pdb_files = sorted(
             f for f in output_dir.glob('*.pdb') if f.with_suffix('.trb').is_file()
         )  # _0, _1, _10, _2, _3 ...
@@ -103,16 +99,6 @@ class RFdiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         # any other native multi-output mover. This replaces silently
         # discarding every design past the first.
         self.additional_poses_ = list(designed_poses[1:])
-
-        try:
-            if temp_dir:
-                temp_dir.cleanup()
-                self.tracer_debug << f"Cleaned up temporary directory {run_dir} \n" and self.tracer_debug.flush()
-            elif self.delete_dir_:
-                shutil.rmtree(run_dir)
-                self.tracer_debug << f"Deleted run directory {run_dir} \n" and self.tracer_debug.flush()
-        except Exception:
-            self.tracer_debug << f"Failed to clean up {run_dir} \n" and self.tracer_debug.flush()
 
     def _load_and_label_design(self, pdb_file):
         """Load a single RFdiffusion output .pdb and stamp it with the same
