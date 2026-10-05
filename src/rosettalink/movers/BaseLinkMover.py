@@ -18,29 +18,7 @@ class BaseLinkMover(pyrosetta.rosetta.protocols.moves.Mover):
     clones_ = list()
 
     def apply(self, pose):
-        original_cwd = os.getcwd()
-        temp_dir = tempfile.TemporaryDirectory()
-        self.run_dir = Path(temp_dir.name)
-        self.tracer_info << f"Using temporary directory: {self.run_dir} \n" and self.tracer_info.flush()
-        os.chdir(self.run_dir)
-        try:
-            self.apply_in_dir(pose)
-        except Exception as e:
-            self.tracer_error << f"Error in apply(): {e} \n" and self.tracer_error.flush()
-            raise e
-        finally:
-            # Cleanup TMP
-            os.chdir(original_cwd)
-
-            try:
-                if temp_dir:
-                    temp_dir.cleanup()
-                    self.tracer_debug << f"Cleaned up temporary directory {self.run_dir} \n" and self.tracer_debug.flush()
-                elif self.delete_dir_:
-                    shutil.rmtree(self.run_dir)
-                    self.tracer_debug << f"Deleted run directory {self.run_dir} \n" and self.tracer_debug.flush()
-            except Exception:
-                self.tracer_debug << f"Failed to clean up {self.run_dir} \n" and self.tracer_debug.flush()
+        self.tracer_debug << f"Hello there! \n" and self.tracer_debug.flush()
         
 
 

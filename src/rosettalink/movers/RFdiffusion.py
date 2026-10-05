@@ -8,6 +8,7 @@ import pyrosetta
 from rosettalink.decorators import register_mover
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
+from rosettalink.utils import work_dir
 import rosettalink.movers.BaseLinkMover as BaseLinkMover
 from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector, FalseResidueSelector
 
@@ -49,56 +50,56 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         RFdiffusion.clones_.append(copy)
         return copy
 
-    def apply_in_dir(self, pose):
-        # We are already in tmp_dir (run_dir) at this point.
-        run_dir = self.run_dir # Obtained from parent BaseClassMover
-        self.tracer_info << f"We are using temporary directory: {run_dir} \n" and self.tracer_info.flush()
+    def apply(self, pose):
+        with work_dir(self.work_dir_) as run_dir:
+            # We are already in tmp_dir (run_dir) at this point.
+            self.tracer_info << f"We are using temporary directory: {run_dir} \n" and self.tracer_info.flush()
 
-        self.tracer_info << f"Current working directory: {os.getcwd()} \n" and self.tracer_info.flush()
+            self.tracer_info << f"Current working directory: {os.getcwd()} \n" and self.tracer_info.flush()
 
-        os.makedirs("output", exist_ok=True)
-        os.makedirs("output/schedules", exist_ok=True)
+            os.makedirs("output", exist_ok=True)
+            os.makedirs("output/schedules", exist_ok=True)
 
-        # Save input pose to run_dir, so we can input it into RfDiff
-        pyrosetta.dump_pdb(pose, str('input.pdb'))
+            # Save input pose to run_dir, so we can input it into RfDiff
+            pyrosetta.dump_pdb(pose, str('input.pdb'))
 
 
-        rfdiff_cmd_str = f"singularity run --nv \
-            {self.rfdiffusion_path_} \
-            inference.schedule_directory_path=output/schedules \
-            inference.output_prefix=output/ \
-            'contigmap.contigs={self.contig_}' \
-            inference.num_designs={self.num_designs_} \
-            {self.extra_args_ if self.extra_args_ else ''} \
-            -cd output"   # IMPORTANT: Needs to be outside container (without leading slash)
-            
-        run_and_log(rfdiff_cmd_str, self.tracer_info, self.tracer_error)
-        # RFdiffusion writes a .trb next to every design, and the input pose
-        # was dumped into this same directory, so key off the .trb rather
-        # than picking up input.pdb as if it were a design.
-        output_dir = Path("output")
-        pdb_files = sorted(
-            f for f in output_dir.glob('*.pdb') if f.with_suffix('.trb').is_file()
-        )  # _0, _1, _10, _2, _3 ...
-        if not pdb_files:
-            self.tracer_error << f"No .pdb files found in output directory {output_dir} \n" and self.tracer_error.flush()
-            raise Exception(f"No .pdb files found in output directory {output_dir}")
-        self.tracer_info << f"Found .pdb files: {[str(pdb) for pdb in pdb_files]} \n" and self.tracer_info.flush()
+            rfdiff_cmd_str = f"singularity run --nv \
+                {self.rfdiffusion_path_} \
+                inference.schedule_directory_path=output/schedules \
+                inference.output_prefix=output/ \
+                'contigmap.contigs={self.contig_}' \
+                inference.num_designs={self.num_designs_} \
+                {self.extra_args_ if self.extra_args_ else ''} \
+                -cd output"   # IMPORTANT: Needs to be outside container (without leading slash)
+                
+            run_and_log(rfdiff_cmd_str, self.tracer_info, self.tracer_error)
+            # RFdiffusion writes a .trb next to every design, and the input pose
+            # was dumped into this same directory, so key off the .trb rather
+            # than picking up input.pdb as if it were a design.
+            output_dir = Path("output")
+            pdb_files = sorted(
+                f for f in output_dir.glob('*.pdb') if f.with_suffix('.trb').is_file()
+            )  # _0, _1, _10, _2, _3 ...
+            if not pdb_files:
+                self.tracer_error << f"No .pdb files found in output directory {output_dir} \n" and self.tracer_error.flush()
+                raise Exception(f"No .pdb files found in output directory {output_dir}")
+            self.tracer_info << f"Found .pdb files: {[str(pdb) for pdb in pdb_files]} \n" and self.tracer_info.flush()
 
-        designed_poses = [self._load_and_label_design(pdb_file) for pdb_file in pdb_files]
+            designed_poses = [self._load_and_label_design(pdb_file) for pdb_file in pdb_files]
 
-        # Primary output: the pose the caller (RosettaScripts/JD2/plain python)
-        # already holds a reference to gets the first design, exactly as before.
-        pose.assign(designed_poses[0])
+            # Primary output: the pose the caller (RosettaScripts/JD2/plain python)
+            # already holds a reference to gets the first design, exactly as before.
+            pose.assign(designed_poses[0])
 
-        # Every further design is handed off through Mover::get_additional_output(),
-        # the standard Rosetta mechanism for one-to-many movers: JD2's job
-        # distributor (and therefore rosetta_scripts, RosettaScripts-driven
-        # PyRosetta code, MultiplePoseMover, etc.) automatically drains this
-        # after apply() and emits one output structure per pose, exactly like
-        # any other native multi-output mover. This replaces silently
-        # discarding every design past the first.
-        self.additional_poses_ = list(designed_poses[1:])
+            # Every further design is handed off through Mover::get_additional_output(),
+            # the standard Rosetta mechanism for one-to-many movers: JD2's job
+            # distributor (and therefore rosetta_scripts, RosettaScripts-driven
+            # PyRosetta code, MultiplePoseMover, etc.) automatically drains this
+            # after apply() and emits one output structure per pose, exactly like
+            # any other native multi-output mover. This replaces silently
+            # discarding every design past the first.
+            self.additional_poses_ = list(designed_poses[1:])
 
     def _load_and_label_design(self, pdb_file):
         """Load a single RFdiffusion output .pdb and stamp it with the same

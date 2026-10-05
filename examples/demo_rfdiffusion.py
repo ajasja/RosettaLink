@@ -1,3 +1,5 @@
+import os
+
 import pyrosetta
 import rosettalink
 from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
@@ -22,7 +24,7 @@ xml_string = """
     </RESIDUE_SELECTORS>
 
     <MOVERS>
-        <RFdiffusion name="make_backbone" contig="[3-4/0 5-6/A1-10/3/A15-16/2-2/0 A17-20]" num_designs="1" rfdiffusion_path="~/shared_folder/sif_files/rfdiff.sif" extra_args="inference.input_pdb=input.pdb contigmap.inpaint_seq=[A5-18]" delete_dir="true" work_dir="TESTNIDIRIRinpaintMASKED" />
+        <RFdiffusion name="make_backbone" contig="[3-4/0 5-6/A1-10/3/A15-16/2-2/0 A17-20]" num_designs="1" rfdiffusion_path="~/shared_folder/sif_files/rfdiff.sif" extra_args="inference.input_pdb=input.pdb contigmap.inpaint_seq=[A5-18]" delete_dir="true" work_dir="/full/absolute/path/TESTNIDIRIRinpaintMASKED" />
     </MOVERS>       
 
     <PROTOCOLS>
@@ -38,6 +40,7 @@ protocol = xml.get_mover("ParsedProtocol")
 protocol.apply(pose)
 print(f"Pose size (All available attributes): {pose.size()} {len(pose)} {pose.total_residue()}, pose sequence: {pose.sequence()}")
 print("Dumping pose to file: TESTNIDIRIRinpaintMASKED/TESTNIDIRIRinpaintMASKED_00013.pdb")
+os.makedirs("TESTNIDIRIRinpaintMASKED", exist_ok=True)
 pose.dump_pdb("TESTNIDIRIRinpaintMASKED/TESTNIDIRIRinpaintMASKED_00013.pdb")
 
 # Residues to mutate are also saved in pose.pdb_info().res_haslabel(1, "inpaint_seq")
