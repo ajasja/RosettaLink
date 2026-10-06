@@ -1,0 +1,1 @@
+Integration tests (such as snippets of XML files and similar go here)
