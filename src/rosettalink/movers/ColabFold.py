@@ -25,13 +25,6 @@
 # these structures have no correspondence to the input pose, reslabels and
 # RMSD metrics are skipped.
 
-"""
-ColabFold command strings should match those in do_cycling.
-    reference: https://github.com/ajasja/prosculpt/blob/5211fe061fe0cf03f79a9912fcb9c0f96fc11875/rfdiff_mpnn_af2_merged.py
-All scoring metrics should match those in rename_pdb_create_csv_colabfold.
-    reference: https://github.com/ajasja/prosculpt/blob/main/prosculpt.py
-"""
-
 import json
 import os
 from pathlib import Path
@@ -275,23 +268,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             if key in scores:
                 value = float(np.mean(scores[key]))
                 score_name = f"{self.prefix_name_}{key}"
-                setPoseExtraScore(pose, score_name, value)
-                self.tracer_info << f"\t{record_id} {score_name}: {value}\n" and self.tracer_info.flush()
-
-        # Mean pLDDT over the residues labelled sculpted. The label is left
-        # over from prosculpt and matches nothing on a pose labelled by the
-        # RFdiffusion mover, so the score is skipped rather than reported as
-        # the mean of an empty selection.
-        if "plddt" in scores:
-            pdb_info = pose.pdb_info()
-            per_residue = [
-                scores["plddt"][resnum - 1]
-                for resnum in range(1, min(pose.total_residue(), len(scores["plddt"])) + 1)
-                if pdb_info is not None and pdb_info.res_haslabel(resnum, "sculpted")
-            ]
-            if per_residue:
-                value = float(np.mean(per_residue))
-                score_name = f"{self.prefix_name_}plddt_sculpted"
                 setPoseExtraScore(pose, score_name, value)
                 self.tracer_info << f"\t{record_id} {score_name}: {value}\n" and self.tracer_info.flush()
 
