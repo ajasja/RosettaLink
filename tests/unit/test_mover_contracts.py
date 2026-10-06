@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-MOVERS_DIR = Path(__file__).resolve().parents[2] / "src" / "rosettalink" / "movers"
+MOVERS_DIR = Path(__file__).absolute().parents[2] / "src" / "rosettalink" / "movers"
 MOVER_FILES = sorted(MOVERS_DIR.glob("*.py"))
 
 # Attributes deliberately absent from clone(): per-apply() state, not options.

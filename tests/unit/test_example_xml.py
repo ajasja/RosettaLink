@@ -12,7 +12,7 @@ import pytest
 
 from rosettalink.scripts.run_xml import PLACEHOLDER
 
-EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
+EXAMPLES_DIR = Path(__file__).absolute().parents[2] / "examples"
 XML_FILES = sorted(EXAMPLES_DIR.glob("*.xml"))
 
 
