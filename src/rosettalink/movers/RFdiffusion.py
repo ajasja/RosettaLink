@@ -51,8 +51,6 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
     def apply(self, pose):
         with work_dir(self.work_dir_) as run_dir:
             # We are already in tmp_dir (run_dir) at this point.
-            self.tracer_info << f"We are using temporary directory: {run_dir} \n" and self.tracer_info.flush()
-
             self.tracer_info << f"Current working directory: {os.getcwd()} \n" and self.tracer_info.flush()
 
             os.makedirs("output", exist_ok=True)
