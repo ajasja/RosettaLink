@@ -16,7 +16,6 @@ REGISTRATION_MODULES = {
         'Boltz2',
         'ESMFold2',
         'HBDesigner',
-        'BaseLinkMover',
     ],
 }
 
