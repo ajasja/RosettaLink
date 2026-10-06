@@ -123,6 +123,91 @@ def get_run_command(mover_name, run_command=""):
     )
 
 
+# --------------------------------------------------------------------------- #
+# Pose buffer
+# --------------------------------------------------------------------------- #
+
+
+class PoseBuffer:
+    """Poses handed from one RosettaLink mover to the next inside a single
+    PROTOCOLS list, so a stage can run its external program once over every
+    pose instead of once per pose.
+
+    A mover with batch="true" calls consume() to get its full input set and
+    publish() to hand its results on. `owner` is the mover instance that
+    published the current contents; a mover serves get_additional_output()
+    from the buffer only while it is still the owner, so once a downstream
+    mover consumes the poses the upstream mover reports nothing more.
+
+    The buffer is global to the process and holds one chain's worth of poses,
+    so clear() it before applying a protocol to a new input structure.
+    """
+
+    def __init__(self):
+        self.owner = None
+        self.poses = []
+        self.cursor = 0
+
+    def clear(self):
+        self.owner = None
+        self.poses = []
+        self.cursor = 0
+
+    def publish(self, owner, poses):
+        """Stores every pose owner produced. poses[0] is the one already
+        assigned into the pose apply() was handed, so it is not served again
+        through pop_for()."""
+        self.owner = owner
+        self.poses = list(poses)
+        self.cursor = 1
+
+    def consume(self, pose, tracer_warning=None):
+        """Every pose the previous stage published, or [pose] when there is
+        none. Empties the buffer, so the mover that published them stops
+        offering them through get_additional_output().
+
+        Falls back to [pose] when the buffered poses do not match the pose
+        handed in, which means the buffer is left over from an earlier
+        protocol rather than coming from the mover just before this one."""
+        if not self.poses:
+            return [pose]
+
+        first = self.poses[0]
+        if first.total_residue() != pose.total_residue() or first.sequence() != pose.sequence():
+            if tracer_warning is not None:
+                tracer_warning << (
+                    f"Ignoring {len(self.poses)} buffered pose(s): the first does not match "
+                    f"the pose handed in. Call rosettalink.utils.pose_buffer.clear() between "
+                    f"input structures.\n"
+                ) and tracer_warning.flush()
+            self.clear()
+            return [pose]
+
+        poses = self.poses
+        self.clear()
+        return poses
+
+    def pop_for(self, owner):
+        """One pose beyond the primary, or None once they are exhausted or
+        another mover has taken ownership."""
+        if self.owner is not owner or self.cursor >= len(self.poses):
+            return None
+        pose = self.poses[self.cursor]
+        self.cursor += 1
+        return pose
+
+    def drain(self):
+        """Every pose not yet served, whoever owns them, and empties the
+        buffer. For a driver collecting the results of a finished protocol."""
+        remaining = self.poses[self.cursor:]
+        self.clear()
+        return remaining
+
+
+# Process-wide buffer the batching movers hand poses through.
+pose_buffer = PoseBuffer()
+
+
 def parse_fasta_records(fasta_path, chain_separator=":"):
     """Reads a fasta into [(record_id, [sequence, ...]), ...]. One record is
     one model, and its sequence is split on chain_separator into chains, so
@@ -170,6 +255,13 @@ def parse_fasta_records(fasta_path, chain_separator=":"):
     if not records:
         raise RuntimeError(f"No sequences found in {fasta_path}")
     return records
+
+
+def pose_chain_sequences(pose):
+    """Sequences of the pose, one per chain, in pose order. Used to build the
+    input of a structure predictor, so that a complex is folded as a complex
+    rather than as one fused polypeptide."""
+    return [chain.sequence() for chain in pose.split_by_chain()]
 
 
 def drain_additional_output(mover):

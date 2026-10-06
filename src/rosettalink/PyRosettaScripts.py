@@ -35,7 +35,11 @@ class PyRosettaScripts:
 
     @staticmethod
     def _load_configuration(config):
-        from .utils import CONFIG_FILENAME, config_search_paths, load_configuration
+        from .utils import CONFIG_FILENAME, config_search_paths, load_configuration, pose_buffer
+
+        # Poses left over from an earlier protocol in the same process are not
+        # inputs to the next one.
+        pose_buffer.clear()
 
         loaded_from = load_configuration(config)
         if loaded_from:
