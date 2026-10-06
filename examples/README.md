@@ -39,6 +39,11 @@ values cached on each.
 
 ## The XML files
 
+- `colabfold_predict.xml` - refold one structure and report its confidence
+  and a self-consistency RMSD. One stage, no fan-out; the quickest check
+  that an installation works.
+- `redesign_colabfold.xml` - LigandMPNN redesigns the sequence of an input
+  backbone and ColabFold refolds every design. Two batched stages.
 - `pipeline_batched.xml` — binder design with `batch="true"` on every stage,
   so each external program runs once for the whole fan-out rather than once
   per pose. Works in a plain `PROTOCOLS` list.
@@ -49,8 +54,20 @@ values cached on each.
   `num_designs` on LigandMPNN, `<RMSD input= alignment=>`, nested
   `<metric>`).
 
+An input read straight from a pdb carries no reslabels, so the single stage
+and redesign protocols stamp `all` with `AddResidueLabel` for the `<RMSD>`
+tag to select on. A pose coming from RFdiffusion or LigandMPNN is labelled
+already.
+
+Filters placed after a batched mover run on the primary pose only, so their
+columns are blank for every other output structure.
+
 ## The python demos
 
 The `demo_*.py` scripts predate `rosetta_link_scripts` and drive the movers
 directly from python, with the XML inline as a template. New work belongs in
 an XML run through `rosetta_link_scripts`.
+
+The ones left are those that still parse. `demo_boltz2.py`,
+`demo_esmfold2.py` and `demo_hbdesigner.py` are the only examples of those
+three movers, which have no XML yet.
