@@ -1,0 +1,95 @@
+<ROSETTASCRIPTS>
+
+    <SCOREFXNS>
+        <ScoreFunction name="sfxn" weights="ref2015" />
+    </SCOREFXNS>
+
+    <RESIDUE_SELECTORS>
+        <True name="full_pose" />
+        <ResiduePDBInfoHasLabel name="rfd_new_backbone" property="rfd_new_backbone" />
+        <ResiduePDBInfoHasLabel name="rfd_fixed_residues" property="rfd_fixed_residues" />
+        <ResiduePDBInfoHasLabel name="rfd_hidden_residues" property="rfd_hidden_residues" />
+    </RESIDUE_SELECTORS>
+
+    <SIMPLE_METRICS>
+        <SapScoreMetric name="sap_score"
+            score_selector="full_pose"
+            sap_calculate_selector="full_pose"
+            sasa_selector="full_pose" />
+    </SIMPLE_METRICS>
+
+    <MOVERS>
+        <RFDiffusion name="design_backbone"
+            contig="{contig}"
+            num_designs="{num_backbones}"
+            prefix_name="rfd_"
+            work_dir="{rfdiffusion_work_dir}"
+            delete_dir="false" />
+        #RFdiffusion uses the following labels: new_backbone, fixed_residues, hidden_residues, motif, fixed
+        <LigandMPNN name="design_sequence"    
+            num_designs="{num_sequences_per_backbone}"
+            residues_to_design="rfd_new_backbone or rfd_hidden_residues"
+            prefix_name="rfd_"
+            work_dir="{ligandmpnn_work_dir}"
+            delete_dir="false" />
+        #should it be num designs
+        <ColabFold name="predict_structure"
+            models="1,2"
+            msa_mode="single_sequence"
+            rank="auto"
+            prefix_name="AF2_"
+            replace_pose="1"
+            work_dir="{colabfold_work_dir}"
+            delete_dir="false">
+            # do we need two (input and prediction selectors?) can it be just calculation
+            <RMSD name="scRMSD_all" input="all"  alignment="all" />
+            <RMSD name="scRMSD_motif" input="motif" alignment="motif" />
+            <RMSD name="scRMSD_designed" input="designed" alignment="designed" />
+            <metric name="plddt" selector="all" />
+            <metric name="plddt_motif" selector="motif" />
+            <metric name="plddt_designed" selector="designed" />
+            #can we calculate iPSAE etc?
+        </ColabFold>
+
+    </MOVERS>
+
+
+    <FILTERS>
+        <LongestContinuousApolarSegment name="apolar_segment"
+            residue_selector="full_pose"
+            confidence="0" />
+        <NetCharge name="netcharge" confidence="0" />
+        <BuriedUnsatHbonds2 name="buried_unsat"
+            scorefxn="sfxn"
+            jump_number="0"
+            confidence="0" />
+    </FILTERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add mover="design_sequence" />
+            <FOR_EACH_POSE><PROTOCOLS>
+                <Add mover="predict_structure" />
+                <Add metrics="sap_score" />
+                <Add filter="apolar_segment" />
+                <Add filter="netcharge" />
+                <Add filter="buried_unsat" />
+            </PROTOCOLS></FOR_EACH_POSE>
+        </PROTOCOLS></FOR_EACH_POSE>
+    </PROTOCOLS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+        <Add mover="design_sequence" />
+        <Add mover="predict_structure" />
+        <FOR_EACH_POSE><PROTOCOLS>
+
+            <Add metrics="sap_score" />
+            <Add filter="apolar_segment" />
+            <Add filter="netcharge" />
+            <Add filter="buried_unsat" />
+        </PROTOCOLS></FOR_EACH_POSE>
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
