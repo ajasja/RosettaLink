@@ -130,12 +130,14 @@ def resolve_rmsd_atoms(atoms):
 
 
 @contextmanager
-def work_dir(work_dir_=None):
+def work_dir(work_dir_=None, tracer_debug=None):
         original_cwd = os.getcwd()
-        work_dir_ = Path(work_dir_).resolve() if work_dir_ is not None and work_dir_ != "" else None # To allow relative and absolute passing of work_dir
+        work_dir_ = Path(work_dir_).resolve() if work_dir_ else None # To allow relative and absolute passing of work_dir
         temp_dir = tempfile.TemporaryDirectory()
         run_dir = Path(temp_dir.name)
-        #tracer_info << f"Using temporary directory: {run_dir} \n" and tracer_info.flush()
+        if tracer_debug:
+            tracer_debug << f"Using temporary directory: {run_dir} \n" and tracer_debug.flush()
+
         os.chdir(run_dir)
         try:
             yield run_dir
@@ -149,7 +151,8 @@ def work_dir(work_dir_=None):
             try:
                 if temp_dir:
                     temp_dir.cleanup()
-                    #tracer_debug << f"Cleaned up temporary directory {run_dir} \n" and tracer_debug.flush()
+                    if tracer_debug:
+                        tracer_debug << f"Cleaned up temporary directory {run_dir} \n" and tracer_debug.flush()
             except Exception:
                 #tracer_debug << f"Failed to clean up {run_dir} \n" and tracer_debug.flush()
                 pass
