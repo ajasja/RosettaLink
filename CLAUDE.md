@@ -46,7 +46,7 @@ not exist** — no error, the file is simply never imported.
 
 | role | mover | fan-out attribute |
 |---|---|---|
-| backbone generation | RFDiffusion | `num_designs` |
+| backbone generation | RFdiffusion | `num_designs` |
 | sequence design | LigandMPNN | `batch_size` × `number_of_batches` |
 | structure prediction | ColabFold, Boltz2, ESMFold2 | —, `diffusion_samples`, `num_diffusion_samples` |
 | none | HBDesigner | `top_k`, ranked best first |
@@ -69,8 +69,28 @@ Breaking one of these usually produces a silently blank column, not an error.
   pose per call, `None` once exhausted. Returning a list works from Python
   and fails inside `MultiplePoseMover` with a pybind11 cast error.
 - **Never write the resolved directory back onto `self.work_dir_`.** The same
-  mover instance is applied more than once by `MultiplePoseMover`. Resolve
-  into a local variable every `apply()`.
+  mover instance is applied more than once by `MultiplePoseMover`.
+
+## Working directories
+
+`utils.work_dir()` is a context manager: it makes a fresh temporary
+directory, **`os.chdir`s into it**, and on exit copies the contents to
+`work_dir_` if one was given, then chdirs back and removes the temporary one.
+
+Everything a mover passes to its external program is therefore **relative** —
+`input.pdb`, `output/`, `--out_folder .`. That is what makes a container and a
+direct call interchangeable without a bind mount, since singularity mounts the
+working directory by default. There is no `delete_dir`.
+
+Two things to know about it:
+
+- `copytree(run_dir, work_dir_, dirs_exist_ok=True)` copies into the *same*
+  `work_dir_` on every `apply()`, so a second call overwrites the first call's
+  saved output. The run itself is safe — each gets its own temp dir. A mover
+  applied more than once (`MultiplePoseMover`, or any `nstruct > 1`) with a
+  `work_dir` set keeps only the last result.
+- `os.chdir` is process-wide. Boltz2, ESMFold2 and HBDesigner do not use the
+  context manager yet and still carry `delete_dir`.
 
 ## Current work (branch `federico`)
 
@@ -88,15 +108,12 @@ The config file is `rosettalink.config.yaml`, searched in the current
 directory then `~/.rosettalink/`, or passed as
 `rosettalink.init(config="/path/to/file")`. It loads into
 `rosettalink.utils.configuration`, **mutated in place** so
-`from rosettalink.utils import configuration` stays valid.
+`from rosettalink.utils import configuration` stays valid. Section keys are
+mover names, so `RFdiffusion`, not `RFDiffusion`.
 
-The old `rfdiffusion_path`, `ligandmpnn_path` and `cmd_header` still work and
-warn. For RFDiffusion and LigandMPNN they keep the old behaviour exactly —
-singularity with the run directory bound to `/output` — because `run_command`
-instead passes **host paths**, so a container reached that way must be able
-to see the working directory. `%run_dir%` in RFDiffusion's `extra_args` is
-replaced with the directory as the command sees it — `%...%` rather than
-`{...}` so the runner's `--var` check does not claim it.
+`rfdiffusion_path`, `ligandmpnn_path` and `delete_dir` were removed on main
+and are gone. ColabFold still accepts `cmd_header` as a deprecated alias,
+matching Boltz2, which still uses that name.
 
 ### Pose buffer (issue #15)
 
@@ -119,8 +136,10 @@ done.
 make the mover consume poses its enclosing loop is also iterating.
 
 Only LigandMPNN actually reduces invocations (`--pdb_path_multi`) and
-ColabFold (one fasta, many records). RFDiffusion reads one structure per
-invocation, so its `batch` only composes the pipeline.
+ColabFold (one fasta, many records). RFdiffusion reads one structure per
+invocation, so its `batch` only composes the pipeline; each input gets its own
+subdirectory, which `_run_one()` chdirs into so the command stays identical to
+the single-pose one.
 
 Clear the buffer between input structures — `rosettalink.init()` and
 `rosetta_link_scripts` both do. A buffer whose first pose does not match the
@@ -148,8 +167,10 @@ is a guess about an external program's behaviour, not about Rosetta:
   With one input pose the mover falls back to globbing every pdb, so only the
   batched path depends on this.
 - ColabFold output files are assumed to be named `{record_id}_*rank_001*`.
-- Whether a container reached through `run_command` can see an arbitrary
-  work_dir without an explicit bind mount.
+- That the four `examples/demo_full_pipeline*.py` scripts are broken on main:
+  they were renamed to the `RFdiffusion` tag but still pass `rfdiffusion_path`
+  and `delete_dir`, which no longer exist in the schema, so they fail at
+  `XmlObjects.create_from_string()`. Not caused by this branch.
 
 Flag anything in this state explicitly rather than presenting it as certain.
 

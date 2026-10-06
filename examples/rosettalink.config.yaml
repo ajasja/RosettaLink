@@ -8,11 +8,11 @@
 # conda environment or a plain binary. A run_command set on the tag wins over
 # the value here.
 #
-# Paths are passed to the program as host paths, so a container has to be able
-# to see the working directory. Add the bind mount here when it is somewhere
-# singularity does not mount by default.
+# Each mover runs from inside a fresh temporary directory and passes only
+# relative paths, so a container sees them through the working directory
+# singularity mounts by default. No bind mount is needed for them.
 
-RFDiffusion:
+RFdiffusion:
   run_command: singularity run --nv /home/folivieri/singularity_files/rfdiff.sif
   # or, against a checkout rather than an image:
   # run_command: /home/folivieri/miniforge3/envs/SE3nv/bin/python /home/folivieri/RFdiffusion/scripts/run_inference.py

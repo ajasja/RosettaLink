@@ -10,7 +10,7 @@ pipeline script.
 
 | Mover | Tool comes as | Lives in | Reached through |
 |---|---|---|---|
-| RFDiffusion | singularity image | its own image | `rfdiffusion_path` |
+| RFdiffusion | singularity image | its own image | `rfdiffusion_path` |
 | LigandMPNN | singularity image | its own image | `ligandmpnn_path` |
 | ColabFold | singularity image | its own image | `cmd_header` |
 | Boltz2 | pip package (CLI) | `rosettalink`, or its own env | `cmd_header` |
@@ -23,7 +23,7 @@ subprocess, so version conflicts between those tools cannot reach
 
 ---
 
-## RFDiffusion
+## RFdiffusion
 
 A singularity image, passed as `rfdiffusion_path`. The mover runs:
 
@@ -33,12 +33,12 @@ singularity run --nv -B <run_dir>:/output <image> inference.output_prefix=/outpu
 
 The image must therefore:
 
-- have RFDiffusion's `run_inference.py` as its runscript, accepting hydra
+- have RFdiffusion's `run_inference.py` as its runscript, accepting hydra
   arguments (`-cd`, `inference.*`)
 - contain the model weights, or have them bound in
 - accept `--nv` for GPU access
 
-Build one from the Dockerfile in the RFDiffusion repository, then convert:
+Build one from the Dockerfile in the RFdiffusion repository, then convert:
 
 ```bash
 docker build -t rfdiffusion .
@@ -46,7 +46,7 @@ singularity build rfdiffusion.sif docker-daemon://rfdiffusion:latest
 ```
 
 ```xml
-<RFDiffusion name="make_backbone" contig="[100-100]" num_designs="2"
+<RFdiffusion name="make_backbone" contig="[100-100]" num_designs="2"
     rfdiffusion_path="/path/to/rfdiffusion.sif" />
 ```
 

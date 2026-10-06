@@ -1,10 +1,13 @@
 import os
 import re
+import shutil
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 # pyrosetta is imported inside the functions that need it, so this module can
-# be imported - and its configuration, pose-buffer and fasta helpers tested -
-# in an environment without PyRosetta.
+# be imported - and its configuration, pose-buffer, work_dir and fasta helpers
+# tested - in an environment without PyRosetta.
 
 
 def run_and_log(command, tracer_info, tracer_error):
@@ -42,7 +45,7 @@ CONFIG_FILENAME = "rosettalink.config.yaml"
 # Contents of the loaded configuration file. One key per mover name, each
 # holding that mover's settings:
 #
-#   RFDiffusion:
+#   RFdiffusion:
 #     run_command: singularity run --nv /path/to/rfdiffusion.sif
 #   ColabFold:
 #     run_command: colabfold_batch
@@ -311,3 +314,32 @@ def resolve_rmsd_atoms(atoms):
             f"or a core::scoring::rmsd_atoms name."
         )
     return getattr(rmsd_atoms, enum_name)
+
+
+@contextmanager
+def work_dir(work_dir_=None, tracer_debug=None):
+        original_cwd = os.getcwd()
+        work_dir_ = Path(work_dir_).resolve() if work_dir_ else None # To allow relative and absolute passing of work_dir
+        temp_dir = tempfile.TemporaryDirectory()
+        run_dir = Path(temp_dir.name)
+        if tracer_debug:
+            tracer_debug << f"Using temporary directory: {run_dir} \n" and tracer_debug.flush()
+
+        os.chdir(run_dir)
+        try:
+            yield run_dir
+        finally:
+            if work_dir_ is not None:
+                os.makedirs(work_dir_, exist_ok=True)
+                shutil.copytree(run_dir, work_dir_, dirs_exist_ok=True)
+
+            # Cleanup TMP
+            os.chdir(original_cwd)
+            try:
+                if temp_dir:
+                    temp_dir.cleanup()
+                    if tracer_debug:
+                        tracer_debug << f"Cleaned up temporary directory {run_dir} \n" and tracer_debug.flush()
+            except Exception:
+                #tracer_debug << f"Failed to clean up {run_dir} \n" and tracer_debug.flush()
+                pass

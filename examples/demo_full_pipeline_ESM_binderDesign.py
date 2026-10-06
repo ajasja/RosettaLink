@@ -1,5 +1,5 @@
 # @file examples/demo_full_pipeline_ESM_binderDesign.py
-# @brief Binder design pipeline: RFDiffusion builds a de novo binder against a
+# @brief Binder design pipeline: RFdiffusion builds a de novo binder against a
 #        fixed target chain, LigandMPNN designs sequences for it, ESMFold2
 #        refolds the complex, and five self-consistency RMSDs are reported
 #        per design in one CSV.
@@ -12,13 +12,13 @@
 #
 # The contig "[B1-150/0 90-120]" keeps target chain B (residues 1-150) whole,
 # then "/0" starts a new chain of 90-120 de novo residues - the binder.
-# Because chain B is kept whole, RFDiffusion writes receptor_con_hal_idx0 to
-# the .trb and the RFDiffusion mover labels those residues fixed_chain, the
+# Because chain B is kept whole, RFdiffusion writes receptor_con_hal_idx0 to
+# the .trb and the RFdiffusion mover labels those residues fixed_chain, the
 # de novo binder residues designed, and any kept-backbone residues outside a
 # fixed chain motif.
 #
 # The RMSDs compare the ESMFold2 prediction against the pose ESMFold2 was
-# handed (the RFDiffusion backbone carrying the LigandMPNN sequence). Each is
+# handed (the RFdiffusion backbone carrying the LigandMPNN sequence). Each is
 # superimposed and measured over the labels shown:
 #                            superimposed on   measured on
 #   scRMSD_all               whole complex     whole complex
@@ -63,7 +63,7 @@ ESMFOLD2_MODEL = "biohub/ESMFold2-Fast"
 
 TARGET_PDB = Path("examples/input_data/insulin_target.pdb").resolve()
 
-NUM_BINDERS = 2                # RFDiffusion num_designs
+NUM_BINDERS = 2                # RFdiffusion num_designs
 NUM_SEQUENCES_PER_BINDER = 2   # LigandMPNN batch_size (per backbone)
 CONTIG = "[B1-150/0 90-120]"   # target chain B kept whole, then a de novo binder
 
@@ -72,7 +72,7 @@ METRICS_CSV = OUTPUT_DIR / "metrics.csv"
 
 # --------------------------------------------------------------------------- #
 # One protocol, top to bottom:
-#   make_binder             (RFDiffusion, N binder backbones on the target)
+#   make_binder             (RFdiffusion, N binder backbones on the target)
 #   -> design_sequences      (MultiplePoseMover: collects all N complexes)
 #        -> make_sequence    (LigandMPNN, M sequences per complex)
 #        -> predict_structures (MultiplePoseMover: collects all M sequences)
@@ -86,7 +86,7 @@ PIPELINE_XML_TEMPLATE = """
 <ROSETTASCRIPTS>
 
     <MOVERS>
-        <RFDiffusion name="make_binder"
+        <RFdiffusion name="make_binder"
             contig="{contig}"
             num_designs="{num_binders}"
             rfdiffusion_path="{rfdiffusion_path}"
@@ -188,7 +188,7 @@ xml = XmlObjects.create_from_string(xml_string)
 protocol = xml.get_mover("ParsedProtocol")
 
 # Unlike the unconditional pipelines, the starting pose matters here: the
-# RFDiffusion mover dumps it to input.pdb, which the contig refers to by
+# RFdiffusion mover dumps it to input.pdb, which the contig refers to by
 # chain (B1-150) via inference.input_pdb in extra_args.
 target_pose = pyrosetta.pose_from_file(str(TARGET_PDB))
 print(f"Target loaded: {target_pose.total_residue()} residues, {target_pose.num_chains()} chain(s)")

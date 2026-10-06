@@ -31,9 +31,7 @@ rosetta_link_scripts -parser:protocol design.xml -s 1ubq.pdb -nstruct 4 -mute al
 ```
 
 `--var NAME=VALUE` fills a `{NAME}` placeholder in the XML. An unfilled one is
-reported by name before Rosetta is reached. `%run_dir%` is **not** a runner
-placeholder — RFDiffusion replaces it with its own working directory at run
-time.
+reported by name before Rosetta is reached.
 
 Every structure the protocol produces is written out, the primary pose and
 everything reached through `get_additional_output()`, with a score file of the
@@ -47,13 +45,12 @@ values cached on each.
 - `../example.xml` (repo root) — work in progress sketch of the target
   syntax. Uses `FOR_EACH_POSE`, which needs a Rosetta build carrying
   RosettaCommons/rosetta#494, and attribute names not yet implemented
-  (`prefix_name` on RFDiffusion and LigandMPNN, `residues_to_design`,
+  (`prefix_name` on RFdiffusion and LigandMPNN, `residues_to_design`,
   `num_designs` on LigandMPNN, `<RMSD input= alignment=>`, nested
   `<metric>`).
 
 ## The python demos
 
 The `demo_*.py` scripts predate `rosetta_link_scripts` and drive the movers
-directly from python, with the XML inline as a template. They still work:
-`cmd_header`, `rfdiffusion_path` and `ligandmpnn_path` are deprecated but
-honoured. New work belongs in an XML run through `rosetta_link_scripts`.
+directly from python, with the XML inline as a template. New work belongs in
+an XML run through `rosetta_link_scripts`.

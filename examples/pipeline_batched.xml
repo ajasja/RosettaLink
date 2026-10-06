@@ -29,28 +29,25 @@
     </RESIDUE_SELECTORS>
 
     <MOVERS>
-        <RFDiffusion name="make_backbone"
+        <RFdiffusion name="make_backbone"
             contig="{contig}"
             num_designs="{num_backbones}"
             batch="true"
-            extra_args="inference.input_pdb=%run_dir%/input.pdb"
-            work_dir="{work_dir}/rfdiffusion"
-            delete_dir="false" />
+            extra_args="inference.input_pdb=input.pdb"
+            work_dir="{work_dir}/rfdiffusion" />
 
         <LigandMPNN name="make_sequence"
             batch="true"
             batch_size="{num_sequences}"
             fixed_reslabel="fixed_chain"
-            work_dir="{work_dir}/ligandmpnn"
-            delete_dir="false" />
+            work_dir="{work_dir}/ligandmpnn" />
 
         <ColabFold name="predict_structure"
             batch="true"
             models="1,2"
             msa_mode="single_sequence"
             prefix_name="AF2_"
-            work_dir="{work_dir}/colabfold"
-            delete_dir="false">
+            work_dir="{work_dir}/colabfold">
             <RMSD name="scRMSD_all" reslabel_input="all" reslabel_prediction="all" />
             <RMSD name="scRMSD_designed" reslabel_input="designed" reslabel_prediction="designed" />
             <RMSD name="scRMSD_binder_on_target" reslabel_input="designed" reslabel_prediction="designed"

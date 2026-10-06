@@ -86,13 +86,13 @@ def test_loading_replaces_the_previous_configuration(tmp_path):
 	first = tmp_path / "first.yaml"
 	first.write_text("ColabFold:\n  run_command: first\n")
 	second = tmp_path / "second.yaml"
-	second.write_text("RFDiffusion:\n  run_command: second\n")
+	second.write_text("RFdiffusion:\n  run_command: second\n")
 
 	utils.load_configuration(str(first))
 	utils.load_configuration(str(second))
 
 	assert "ColabFold" not in utils.configuration
-	assert utils.configuration["RFDiffusion"]["run_command"] == "second"
+	assert utils.configuration["RFdiffusion"]["run_command"] == "second"
 
 
 def test_run_command_from_the_tag_wins():

@@ -73,22 +73,22 @@ def test_a_var_value_may_contain_an_equals_sign():
 
 def test_placeholders_are_filled():
 	filled = run_xml.fill_protocol(
-		'<RFDiffusion contig="{contig}" num_designs="{num}" />',
+		'<RFdiffusion contig="{contig}" num_designs="{num}" />',
 		{"contig": "[100-100]", "num": "4"},
 	)
 
-	assert filled == '<RFDiffusion contig="[100-100]" num_designs="4" />'
+	assert filled == '<RFdiffusion contig="[100-100]" num_designs="4" />'
 
 
 def test_an_unfilled_placeholder_is_reported_by_name():
 	with pytest.raises(SystemExit) as error:
-		run_xml.fill_protocol('<RFDiffusion contig="{contig}" />', {})
+		run_xml.fill_protocol('<RFdiffusion contig="{contig}" />', {})
 
 	assert "contig" in str(error.value)
 
 
 def test_a_protocol_without_placeholders_needs_no_vars():
-	xml = '<RFDiffusion contig="[100-100]" />'
+	xml = '<RFdiffusion contig="[100-100]" />'
 
 	assert run_xml.fill_protocol(xml, {}) == xml
 
