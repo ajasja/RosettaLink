@@ -55,6 +55,20 @@ def test_scorefile_format_is_checked():
 		parse(["--protocol", "design.xml", "--scorefile-format", "sqlite"])
 
 
+def test_the_rosetta_scripts_spelling_of_a_var():
+	arguments, _ = parse(["--protocol", "p.xml", "-parser:script_vars", "num=4"])
+
+	assert run_xml.parse_vars(arguments.var) == {"num": "4"}
+
+
+def test_the_short_spelling_of_a_var():
+	# XML forbids '--' inside a comment, so an example command written in one
+	# can only use this spelling.
+	arguments, _ = parse(["--protocol", "p.xml", "-var", "num=4"])
+
+	assert run_xml.parse_vars(arguments.var) == {"num": "4"}
+
+
 def test_vars_are_parsed():
 	assert run_xml.parse_vars(["contig=[100-100]", "num=4"]) == {
 		"contig": "[100-100]",

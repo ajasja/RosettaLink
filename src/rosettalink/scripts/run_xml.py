@@ -15,6 +15,7 @@
 # A protocol holding {placeholders} is filled from --var:
 #
 #   rosetta_link_scripts --protocol design.xml --var contig=[100-100] --var num=4
+#   rosetta_link_scripts -parser:protocol design.xml -parser:script_vars num=4
 #
 # Every structure the protocol produces is written out, the primary pose and
 # everything reached through get_additional_output(), together with a score
@@ -44,6 +45,10 @@ LEGACY_OPTIONS = {
     "-scorefile": "--scorefile",
     "-out:file:scorefile_format": "--scorefile-format",
     "-scorefile_format": "--scorefile-format",
+    # One assignment each, unlike rosetta_scripts, which takes several after
+    # a single -parser:script_vars.
+    "-parser:script_vars": "--var",
+    "-var": "--var",
 }
 
 PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
