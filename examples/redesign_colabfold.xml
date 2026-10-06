@@ -39,7 +39,7 @@
             prefix_name="AF2_"
             replace_pose="1"
             work_dir="{work_dir}/colabfold">
-            <RMSD name="scRMSD_all" reslabel_input="all" reslabel_prediction="all" />
+            <RMSD name="scRMSD_all" calculation="all" />
         </ColabFold>
     </MOVERS>
 

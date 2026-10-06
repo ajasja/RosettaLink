@@ -24,8 +24,8 @@
 
     <RESIDUE_SELECTORS>
         <True name="full_pose" />
-        <ResiduePDBInfoHasLabel name="designed" property="designed" />
-        <ResiduePDBInfoHasLabel name="fixed_chain" property="fixed_chain" />
+        <ResiduePDBInfoHasLabel name="new_backbone" property="new_backbone" />
+        <ResiduePDBInfoHasLabel name="fixed" property="fixed" />
     </RESIDUE_SELECTORS>
 
     <MOVERS>
@@ -39,7 +39,7 @@
         <LigandMPNN name="make_sequence"
             batch="true"
             batch_size="{num_sequences}"
-            fixed_reslabel="fixed_chain"
+            fixed_reslabel="fixed"
             work_dir="{work_dir}/ligandmpnn" />
 
         <ColabFold name="predict_structure"
@@ -48,10 +48,9 @@
             msa_mode="single_sequence"
             prefix_name="AF2_"
             work_dir="{work_dir}/colabfold">
-            <RMSD name="scRMSD_all" reslabel_input="all" reslabel_prediction="all" />
-            <RMSD name="scRMSD_designed" reslabel_input="designed" reslabel_prediction="designed" />
-            <RMSD name="scRMSD_binder_on_target" reslabel_input="designed" reslabel_prediction="designed"
-                  reslabel_superimpose="fixed_chain" />
+            <RMSD name="scRMSD_all" calculation="all" />
+            <RMSD name="scRMSD_new_backbone" calculation="new_backbone" />
+            <RMSD name="scRMSD_binder_on_target" calculation="new_backbone" alignment="fixed" />
         </ColabFold>
     </MOVERS>
 

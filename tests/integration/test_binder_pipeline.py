@@ -31,7 +31,7 @@ EXPECTED_SCORES = (
 	"AF2_plddt",
 	"AF2_pae",
 	"AF2_scRMSD_all",
-	"AF2_scRMSD_designed",
+	"AF2_scRMSD_new_backbone",
 	"AF2_scRMSD_binder_on_target",
 )
 
@@ -86,8 +86,8 @@ def test_the_contig_labels_a_target_and_a_binder(results):
 
 	for row in rows:
 		path = output_dir / row["description"]
-		assert len(labelled_sequence(path, "fixed_chain")) == TARGET_RESIDUES
-		assert len(labelled_sequence(path, "designed")) > 0
+		assert len(labelled_sequence(path, "fixed")) == TARGET_RESIDUES
+		assert len(labelled_sequence(path, "new_backbone")) > 0
 
 
 def test_the_binder_length_is_within_the_contig_range(results):
@@ -95,7 +95,7 @@ def test_the_binder_length_is_within_the_contig_range(results):
 	output_dir, rows = results
 
 	for row in rows:
-		binder = labelled_sequence(output_dir / row["description"], "designed")
+		binder = labelled_sequence(output_dir / row["description"], "new_backbone")
 		assert 90 <= len(binder) <= 120
 
 
@@ -108,7 +108,7 @@ def test_the_target_sequence_is_not_redesigned(results):
 	target = pyrosetta.pose_from_file(INPUT).sequence()
 
 	for row in rows:
-		kept = labelled_sequence(output_dir / row["description"], "fixed_chain")
+		kept = labelled_sequence(output_dir / row["description"], "fixed")
 		assert kept == target, f"{row['description']} redesigned the target"
 
 
@@ -119,18 +119,19 @@ def test_aligning_on_the_target_cannot_fit_the_binder_better(results):
 	_, rows = results
 
 	for row in rows:
-		assert row["AF2_scRMSD_binder_on_target"] >= row["AF2_scRMSD_designed"]
+		assert row["AF2_scRMSD_binder_on_target"] >= row["AF2_scRMSD_new_backbone"]
 
 
-def test_each_design_is_folded_as_itself(results):
-	# Four records, four predictions: a design must not come back carrying
-	# another design's structure.
+def test_every_design_carries_the_label_the_metrics_select_on(results):
+	# Do not turn this into a check that the designs differ. The stub reuses
+	# a recording whenever a protocol asks for more records than the fixture
+	# holds, so output structures may legitimately be copies of each other;
+	# stubs/colabfold.py and readme.md describe when. This fixture matches
+	# this protocol, but the assertion must not depend on that.
 	output_dir, rows = results
 
-	lengths = {
-		len(labelled_sequence(output_dir / row["description"], "all")) for row in rows
-	}
-	assert lengths, "no design carried the all label"
+	for row in rows:
+		assert labelled_sequence(output_dir / row["description"], "all")
 
 
 if __name__ == "__main__":
