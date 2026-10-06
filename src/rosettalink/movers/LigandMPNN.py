@@ -20,7 +20,8 @@
 # sets, and the *_multi options, which the mover writes itself when batching.
 #
 # fixed_reslabel and redesigned_reslabel take a residue label instead of a
-# residue list, and expand to --fixed_residues and --redesigned_residues.
+# residue list, and residues_to_design takes a residue selector by name; all
+# three expand to --fixed_residues and --redesigned_residues.
 # This is how a network or motif labelled by an earlier mover is held fixed
 # without naming residues by hand.
 #
@@ -31,7 +32,9 @@
 # Total sequences per input pose = batch_size * number_of_batches. The first
 # enters the pose, the rest come back through get_additional_output().
 #
-# Reslabels on the input pose are carried onto every designed sequence.
+# Reslabels on the input pose are carried onto every designed sequence, and
+# every residue the mover was free to redesign is labelled
+# prefix_name + new_sidechains.
 
 import json
 import os
@@ -39,6 +42,7 @@ from pathlib import Path
 
 import pyrosetta
 from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabelSelector
+from pyrosetta.rosetta.core.select.residue_selector import get_residue_selector
 
 from rosettalink.decorators import register_mover
 from rosettalink.utils import get_run_command
@@ -111,6 +115,8 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         number_of_batches="1",
         fixed_reslabel="",
         redesigned_reslabel="",
+        residues_to_design=None,
+        prefix_name="",
         extra_args=None,
         work_dir=None,
         **options
@@ -125,6 +131,8 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         self.number_of_batches_ = number_of_batches
         self.fixed_reslabel_ = fixed_reslabel
         self.redesigned_reslabel_ = redesigned_reslabel
+        self.residues_to_design_ = residues_to_design
+        self.prefix_name_ = prefix_name
         # Pass-through command line options, empty meaning "leave unset".
         self.options_ = {name: options.get(name, "") for name in OPTION_HELP}
         self.extra_args_ = extra_args
@@ -161,6 +169,8 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         copy.number_of_batches_ = self.number_of_batches_
         copy.fixed_reslabel_ = self.fixed_reslabel_
         copy.redesigned_reslabel_ = self.redesigned_reslabel_
+        copy.residues_to_design_ = self.residues_to_design_
+        copy.prefix_name_ = self.prefix_name_
         copy.options_ = dict(self.options_)
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
@@ -183,6 +193,45 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             for resnum in range(1, pose.total_residue() + 1)
             if selected[resnum]
         )
+
+    @staticmethod
+    def _residues_for_selector(pose, selector):
+        """Residues a residue selector picks, in LigandMPNN chain-and-number
+        form. Empty string when no selector is set."""
+        if selector is None:
+            return ""
+        selected = selector.apply(pose)
+        pdb_info = pose.pdb_info()
+        if pdb_info is None:
+            return ""
+        return " ".join(
+            f"{pdb_info.chain(resnum)}{pdb_info.number(resnum)}"
+            for resnum in range(1, pose.total_residue() + 1)
+            if selected[resnum]
+        )
+
+    @staticmethod
+    def _resnums_for_residues(pose, residues):
+        """Pose numbering of residues given in chain-and-number form."""
+        pdb_info = pose.pdb_info()
+        if pdb_info is None:
+            return set()
+        by_name = {
+            f"{pdb_info.chain(resnum)}{pdb_info.number(resnum)}": resnum
+            for resnum in range(1, pose.total_residue() + 1)
+        }
+        return {by_name[residue] for residue in residues.split() if residue in by_name}
+
+    @classmethod
+    def _redesigned_resnums(cls, pose, redesigned, fixed):
+        """The residues LigandMPNN is free to redesign, in pose numbering.
+
+        That is whatever was named as redesigned, or, when nothing was, every
+        residue that was not held fixed."""
+        if redesigned.strip():
+            return cls._resnums_for_residues(pose, redesigned)
+        every = set(range(1, pose.total_residue() + 1))
+        return every - cls._resnums_for_residues(pose, fixed)
 
     @staticmethod
     def _write_json(name, contents):
@@ -228,18 +277,23 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             # Residue lists from a label are merged with any given literally,
             # per input pose, since a label resolves to different residues on
             # each.
-            residue_lists = {}
-            for name, reslabel in (
-                ("fixed_residues", self.fixed_reslabel_),
-                ("redesigned_residues", self.redesigned_reslabel_),
-            ):
-                residue_lists[name] = [
+            residue_lists = {
+                "fixed_residues": [
                     self._merge_residues(
-                        self.options_.get(name, ""),
-                        self._residues_for_label(input_pose, reslabel),
+                        self.options_.get("fixed_residues", ""),
+                        self._residues_for_label(input_pose, self.fixed_reslabel_),
                     )
                     for input_pose in input_poses
-                ]
+                ],
+                "redesigned_residues": [
+                    self._merge_residues(
+                        self.options_.get("redesigned_residues", ""),
+                        self._residues_for_label(input_pose, self.redesigned_reslabel_),
+                        self._residues_for_selector(input_pose, self.residues_to_design_),
+                    )
+                    for input_pose in input_poses
+                ],
+            }
 
             ligmpnn_cmd_str = (
                 f"{run_command}"
@@ -296,7 +350,7 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             output_dir = Path("packed" if packing else "backbones")
 
             designed_poses = []
-            for stem, input_pose in zip(stems, input_poses):
+            for index, (stem, input_pose) in enumerate(zip(stems, input_poses)):
                 # The trailing underscore keeps design_1 from picking up the
                 # output of design_10.
                 pdb_files = sorted(output_dir.glob(f"{stem}_*.pdb"))  # _0, _1, _10, _2, _3 ...
@@ -308,8 +362,14 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
                     self.tracer_error << f"No .pdb files found for {stem} in output directory {output_dir} \n" and self.tracer_error.flush()
                     raise Exception(f"No .pdb files found for {stem} in output directory {output_dir}")
                 self.tracer_info << f"Found .pdb files for {stem}: {[str(pdb) for pdb in pdb_files]} \n" and self.tracer_info.flush()
+                redesigned_resnums = self._redesigned_resnums(
+                    input_pose,
+                    residue_lists["redesigned_residues"][index],
+                    residue_lists["fixed_residues"][index],
+                )
                 designed_poses.extend(
-                    self._load_and_label_design(pdb_file, input_pose) for pdb_file in pdb_files
+                    self._load_and_label_design(pdb_file, input_pose, redesigned_resnums)
+                    for pdb_file in pdb_files
                 )
 
             # Primary output: the pose the caller already holds a reference to
@@ -327,9 +387,9 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             else:
                 self.additional_poses_ = list(designed_poses[1:])
 
-    def _load_and_label_design(self, pdb_file, input_pose):
-        """Load one designed sequence and carry over the reslabels of the
-        input pose."""
+    def _load_and_label_design(self, pdb_file, input_pose, redesigned_resnums=()):
+        """Load one designed sequence, carry over the reslabels of the input
+        pose, and label the residues this mover redesigned."""
         pose = pyrosetta.pose_from_file(str(pdb_file))
 
         pdb_info_old = input_pose.pdb_info()
@@ -338,6 +398,15 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             for resnum in range(1, min(input_pose.total_residue(), pose.total_residue()) + 1):
                 for reslabel in pdb_info_old.get_reslabels(resnum):
                     pdb_info_new.add_reslabel(resnum, reslabel)
+
+        if pdb_info_new is not None and redesigned_resnums:
+            label = f"{self.prefix_name_}new_sidechains"
+            for resnum in sorted(redesigned_resnums):
+                if resnum <= pose.total_residue():
+                    pdb_info_new.add_reslabel(resnum, label)
+            self.tracer_info << (
+                f"\t{label}: {len(redesigned_resnums)} residue(s)\n"
+            ) and self.tracer_info.flush()
 
         return pose
 
@@ -365,6 +434,11 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         self.number_of_batches_ = tag.get_option_string("number_of_batches") if tag.hasOption("number_of_batches") else "1"
         self.fixed_reslabel_ = tag.get_option_string("fixed_reslabel") if tag.hasOption("fixed_reslabel") else ""
         self.redesigned_reslabel_ = tag.get_option_string("redesigned_reslabel") if tag.hasOption("redesigned_reslabel") else ""
+        self.residues_to_design_ = (
+            get_residue_selector(tag.get_option_string("residues_to_design"), data)
+            if tag.hasOption("residues_to_design") else None
+        )
+        self.prefix_name_ = tag.get_option_string("prefix_name") if tag.hasOption("prefix_name") else ""
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else None
 
@@ -451,6 +525,16 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             "extra_args",
             XMLSchemaType(xs_string),
             "Extra arguments for the LigandMPNN command, for anything this mover does not expose",
+            ""))
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
+            "residues_to_design",
+            XMLSchemaType(xs_string),
+            "Name of a residue selector naming the residues to redesign. Combined with redesigned_reslabel and redesigned_residues. Compose several selectors with an Or selector and name that one here",
+            ""))
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
+            "prefix_name",
+            XMLSchemaType(xs_string),
+            "Put in front of the reslabel this mover stamps, so prefix_name=mpnn_ labels every redesigned residue mpnn_new_sidechains. Empty by default, which leaves the label unprefixed",
             ""))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "work_dir",
