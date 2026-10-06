@@ -13,6 +13,7 @@ dependencies = [
     #"pyrosetta>=2025.47",
     "pyrosetta",
     "biopython",
+    "pyyaml",
 ]
 
 [tool.setuptools]

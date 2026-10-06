@@ -1,0 +1,27 @@
+# Example RosettaLink configuration.
+#
+# Copy to the directory you run from, or to ~/.rosettalink/, or pass the path:
+#     rosettalink.init(config="/path/to/rosettalink.config.yaml")
+#
+# One section per mover. run_command is the whole command prefix that reaches
+# the external program, so the same mover works against a container, another
+# conda environment or a plain binary. A run_command set on the tag wins over
+# the value here.
+#
+# Paths are passed to the program as host paths, so a container has to be able
+# to see the working directory. Add the bind mount here when it is somewhere
+# singularity does not mount by default.
+
+RFDiffusion:
+  run_command: singularity run --nv /home/folivieri/singularity_files/rfdiff.sif
+  # or, against a checkout rather than an image:
+  # run_command: /home/folivieri/miniforge3/envs/SE3nv/bin/python /home/folivieri/RFdiffusion/scripts/run_inference.py
+
+LigandMPNN:
+  run_command: singularity run --nv /home/folivieri/singularity_files/ligandmpnn.sif
+  # run_command: /home/folivieri/miniforge3/envs/ligandmpnn/bin/python /home/folivieri/LigandMPNN/run.py
+
+ColabFold:
+  run_command: colabfold_batch
+  # run_command: singularity run --nv /home/folivieri/singularity_files/colabfold.sif colabfold_batch
+  # run_command: conda run --no-capture-output -n colabfold colabfold_batch

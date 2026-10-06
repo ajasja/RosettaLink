@@ -20,7 +20,7 @@ class PyRosettaScripts:
         self.residue_selector_creators_ = list()
         self._initialized = True
 
-    def init(self, options='-ex1 -ex2aro', *, extra_options='', set_logging_handler=None, notebook=None, silent=False):
+    def init(self, options='-ex1 -ex2aro', *, extra_options='', set_logging_handler=None, notebook=None, silent=False, config=None):
         import pyrosetta
         pyrosetta.init(
             options,
@@ -30,7 +30,22 @@ class PyRosettaScripts:
             silent=silent,
         )
         self._initialized = True
+        self._load_configuration(config)
         self._register_all_components()
+
+    @staticmethod
+    def _load_configuration(config):
+        from .utils import CONFIG_FILENAME, config_search_paths, load_configuration
+
+        loaded_from = load_configuration(config)
+        if loaded_from:
+            print(f"Loaded RosettaLink configuration from {loaded_from}")
+        else:
+            searched = ", ".join(str(path) for path in config_search_paths())
+            print(
+                f"No {CONFIG_FILENAME} found ({searched}); "
+                f"every mover needs run_command set on its tag"
+            )
 
     @staticmethod
     def _register_all_components():
