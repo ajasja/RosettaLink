@@ -24,7 +24,7 @@ xml_string = """
     </RESIDUE_SELECTORS>
 
     <MOVERS>
-        <RFdiffusion name="make_backbone" contig="[3-4/0 5-6/A1-10/3/A15-16/2-2/0 A17-20]" num_designs="1" rfdiffusion_path="~/shared_folder/sif_files/rfdiff.sif" extra_args="inference.input_pdb=input.pdb contigmap.inpaint_seq=[A5-18]" delete_dir="true" work_dir="/full/absolute/path/TESTNIDIRIRinpaintMASKED" />
+        <RFdiffusion name="make_backbone" contig="[3-4/0 5-6/A1-10/3/A15-16/2-2/0 A17-20]" num_designs="1" rfdiffusion_path="~/shared_folder/sif_files/rfdiff.sif" extra_args="inference.input_pdb=input.pdb contigmap.inpaint_seq=[A5-18]" work_dir="relative_or_absolute" />
     </MOVERS>       
 
     <PROTOCOLS>

@@ -22,14 +22,13 @@ import numpy as np
 class RFdiffusion(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
-    def __init__(self, contig=None, num_designs=None, rfdiffusion_path=None, extra_args=None, work_dir=None, delete_dir=None):
+    def __init__(self, contig=None, num_designs=None, rfdiffusion_path=None, extra_args=None, work_dir=None):
         pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
         self.contig_ = contig
         self.num_designs_ = num_designs
         self.rfdiffusion_path_ = rfdiffusion_path
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
-        self.delete_dir_ = delete_dir
         # Populated by apply(): every design beyond the first, exposed to the
         # rest of the Rosetta suite (JD2, RosettaScripts, ...) via the
         # standard Mover::get_additional_output() one-to-many mechanism.
@@ -37,7 +36,7 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
 
         self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, self.tracer_debug, self.tracer_trace, *_ = setup_tracer("[RFdiffusion]")
 
-        self.tracer_info << f"Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_} \n" and self.tracer_info.flush()
+        self.tracer_info << f"Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
 
     def clone(self):
         copy = RFdiffusion()
@@ -46,7 +45,6 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         copy.rfdiffusion_path_ = self.rfdiffusion_path_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
-        copy.delete_dir_ = self.delete_dir_
         RFdiffusion.clones_.append(copy)
         return copy
 
@@ -192,10 +190,9 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         self.rfdiffusion_path_ = tag.get_option_string("rfdiffusion_path")
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
-        self.delete_dir_ = tag.get_option_bool("delete_dir")
 
-        self.tracer_info << f"Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_} \n" and self.tracer_info.flush()
-    
+        self.tracer_info << f"Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
+
 
 
     @staticmethod
@@ -230,10 +227,6 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
             XMLSchemaType(xs_string),
             "Directory where the RFdiffusion output will be stored. If attribute not provided, a new tempfile.TemporaryDirectory will be used. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
             ""))
-        attrlist.append(XMLSchemaAttribute.required_attribute(
-            "delete_dir",
-            XMLSchemaType(xs_boolean),
-            "Whether to delete the work directory after the run (after every design has been read from disk into the primary pose or the additional-output poses)"))
 
         description = '''
                         Runs RFdiffusion to generate backbone designs.

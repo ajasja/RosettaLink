@@ -132,6 +132,7 @@ def resolve_rmsd_atoms(atoms):
 @contextmanager
 def work_dir(work_dir_=None):
         original_cwd = os.getcwd()
+        work_dir_ = Path(work_dir_).resolve() if work_dir_ is not None else None # To allow relative and absolute passing of work_dir
         temp_dir = tempfile.TemporaryDirectory()
         run_dir = Path(temp_dir.name)
         #tracer_info << f"Using temporary directory: {run_dir} \n" and tracer_info.flush()
