@@ -14,6 +14,9 @@
 # every path it passes is relative to it: the input pose is written to
 # input.pdb and the designs land in output/.
 #
+# prefix_name is put in front of every reslabel the mover stamps, so several
+# stages can label the same pose without colliding.
+#
 # batch="true" takes every pose published by the previous RosettaLink stage
 # rather than only the one handed in, and publishes every design for the next
 # stage. RFdiffusion reads one structure per invocation, so this composes the
@@ -41,7 +44,7 @@ import numpy as np
 class RFdiffusion(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
-    def __init__(self, contig=None, num_designs=None, run_command="", batch=False, extra_args=None, work_dir=None):
+    def __init__(self, contig=None, num_designs=None, run_command="", batch=False, extra_args=None, work_dir=None, prefix_name=""):
         pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
         self.contig_ = contig
         self.num_designs_ = num_designs
@@ -49,6 +52,7 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         self.batch_ = batch
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
+        self.prefix_name_ = prefix_name
         # Populated by apply(): every design beyond the first, exposed to the
         # rest of the Rosetta suite (JD2, RosettaScripts, ...) via the
         # standard Mover::get_additional_output() one-to-many mechanism.
@@ -68,6 +72,7 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         copy.batch_ = self.batch_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
+        copy.prefix_name_ = self.prefix_name_
         RFdiffusion.clones_.append(copy)
         return copy
 
@@ -169,15 +174,16 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         resnums_inpaint_str = ",".join(map(str, (np.nonzero(residues_to_choose_with_selector_inpaint_str)[0] + 1).tolist())) # Rosetta expects 1-based indices
         self.tracer_debug << f"Residue numbers to choose with selector: inpaint_seq {resnums_inpaint_seq}; inpaint_str {resnums_inpaint_str} \n" and self.tracer_debug.flush()
 
-        # Residue sets the rest of the suite selects on, in pose numbering:
-        #   inpaint_seq   backbone and identity taken from the input
-        #   inpaint_str   backbone taken from the input, identity may be new
-        #   motif         kept residues placed by the contig
-        #   fixed_chain   kept residues outside the motif, i.e. whole chains
-        #                 carried through untouched
-        #   inpainted     kept backbone whose identity was redesigned
-        #   designed      built de novo
-        #   all           every residue
+        # Residue sets the rest of the suite selects on, in pose numbering.
+        # prefix_name is put in front of each of these names.
+        #   new_backbone        built de novo
+        #   hidden_sidechains   kept backbone whose identity was redesigned
+        #   motif               kept residues placed by the contig
+        #   fixed               kept residues outside the motif, i.e. whole
+        #                       chains carried through untouched
+        #   all                 every residue
+        #   inpaint_seq         backbone and identity taken from the input
+        #   inpaint_str         backbone taken from the input, identity may be new
         inpaint_seq_resnums = {i + 1 for i, kept in enumerate(residues_to_choose_with_selector_inpaint_seq) if kept}
         inpaint_str_resnums = {i + 1 for i, kept in enumerate(residues_to_choose_with_selector_inpaint_str) if kept}
         motif_resnums = {int(index) + 1 for index in trb_dict.get("con_hal_idx0", [])}
@@ -197,9 +203,9 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
             ("inpaint_seq", inpaint_seq_resnums),
             ("inpaint_str", inpaint_str_resnums),
             ("motif", motif_resnums),
-            ("fixed_chain", fixed_chain_resnums),
-            ("inpainted", inpainted_resnums),
-            ("designed", designed_resnums),
+            ("fixed", fixed_chain_resnums),
+            ("hidden_sidechains", inpainted_resnums),
+            ("new_backbone", designed_resnums),
             ("all", all_resnums),
         )
 
@@ -209,6 +215,7 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         for label, resnums in labelled:
             if not resnums:
                 continue
+            label = f"{self.prefix_name_}{label}"
             for resnum in sorted(resnums):
                 pose.pdb_info().add_reslabel(resnum, label)
             self.tracer_info << f"\t{label}: {len(resnums)} residue(s) \n" and self.tracer_info.flush()
@@ -240,6 +247,7 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         self.batch_ = tag.get_option_bool("batch") if tag.hasOption("batch") else False
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else None
+        self.prefix_name_ = tag.get_option_string("prefix_name") if tag.hasOption("prefix_name") else ""
 
         self.tracer_info << f"Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, run_command: {self.run_command_}, batch: {self.batch_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
 
@@ -277,6 +285,11 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
             "extra_args",
             XMLSchemaType(xs_string),
             "Extra arguments for the RFdiffusion executable, e.g. diffuser.T=99999. Paths are relative to the run directory, so the dumped input structure is reached with inference.input_pdb=input.pdb",
+            ""))
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
+            "prefix_name",
+            XMLSchemaType(xs_string),
+            "Put in front of every reslabel this mover stamps, so prefix_name=rfd_ gives rfd_new_backbone, rfd_fixed and so on. Empty by default, which leaves the labels unprefixed",
             ""))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "work_dir",
