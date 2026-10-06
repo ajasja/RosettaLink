@@ -22,8 +22,6 @@
 # Reslabels on the input pose are carried onto every designed sequence.
 
 import os
-import shutil
-import tempfile
 from pathlib import Path
 
 import pyrosetta
@@ -32,6 +30,8 @@ from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabe
 from rosettalink.decorators import register_mover
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
+from rosettalink.utils import work_dir
+import rosettalink.movers.BaseLinkMover as BaseLinkMover
 
 # LigandMPNN command line options, passed through as --name value when set.
 # model_type, checkpoint_protein_mpnn, batch_size and number_of_batches have
@@ -83,27 +83,26 @@ TRUE_VALUES = ("1", "true", "True", "yes", "on")
 DEFAULT_CHECKPOINT = "/app/ligandmpnn/model_params/proteinmpnn_v_48_020.pt"
 
 
-class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
+class LigandMPNN(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
     def __init__(
         self,
         model_type="protein_mpnn",
         checkpoint_protein_mpnn=DEFAULT_CHECKPOINT,
-        ligandmpnn_path=None,
+        run_command=None,
         batch_size="1",
         number_of_batches="1",
         fixed_reslabel="",
         redesigned_reslabel="",
         extra_args=None,
         work_dir=None,
-        delete_dir=None,
         **options
     ):
         pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
         self.model_type_ = model_type
         self.checkpoint_protein_mpnn_ = checkpoint_protein_mpnn
-        self.ligandmpnn_path_ = ligandmpnn_path
+        self.run_command_ = run_command
         # Total sequences designed per input pose = batch_size * number_of_batches.
         self.batch_size_ = batch_size
         self.number_of_batches_ = number_of_batches
@@ -113,7 +112,6 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
         self.options_ = {name: options.get(name, "") for name in OPTION_HELP}
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
-        self.delete_dir_ = delete_dir
         # Populated by apply(): every designed sequence beyond the first,
         # exposed via the standard Mover::get_additional_output() mechanism -
         # same one-to-many pattern as RFdiffusion.
@@ -126,21 +124,20 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
             f"Initializing LigandMPNN:\n"
             f"\tmodel_type: {self.model_type_}\n"
             f"\tcheckpoint_protein_mpnn: {self.checkpoint_protein_mpnn_}\n"
-            f"\tligandmpnn_path: {self.ligandmpnn_path_}\n"
+            f"\trun_command: {self.run_command_}\n"
             f"\tbatch_size: {self.batch_size_}\n"
             f"\tnumber_of_batches: {self.number_of_batches_}\n"
             f"\tfixed_reslabel: {self.fixed_reslabel_}\n"
             f"\tredesigned_reslabel: {self.redesigned_reslabel_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
-            f"\tdelete_dir: {self.delete_dir_}\n"
         ) and self.tracer_info.flush()
 
     def clone(self):
         copy = LigandMPNN()
         copy.model_type_ = self.model_type_
         copy.checkpoint_protein_mpnn_ = self.checkpoint_protein_mpnn_
-        copy.ligandmpnn_path_ = self.ligandmpnn_path_
+        copy.run_command_ = self.run_command_
         copy.batch_size_ = self.batch_size_
         copy.number_of_batches_ = self.number_of_batches_
         copy.fixed_reslabel_ = self.fixed_reslabel_
@@ -148,7 +145,6 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
         copy.options_ = dict(self.options_)
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
-        copy.delete_dir_ = self.delete_dir_
         LigandMPNN.clones_.append(copy)
         return copy
 
@@ -180,94 +176,73 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
         return " ".join(merged)
 
     def apply(self, pose):
-        # Fresh, self-cleaning temp directory every call (or a fresh
-        # subdirectory of a configured work_dir) - never stored back onto
-        # self.work_dir_, so this mover instance can safely be applied more
-        # than once (e.g. from a RosettaScripts MultiplePoseMover).
-        if self.work_dir_ is None or self.work_dir_ == "":
-            temp_dir = tempfile.TemporaryDirectory()
-            run_dir = Path(temp_dir.name)
-            self.tracer_info << f"No work directory specified, using temporary directory: {run_dir} \n" and self.tracer_info.flush()
-        else:
-            temp_dir = None
-            os.makedirs(self.work_dir_, exist_ok=True)
-            run_dir = Path(tempfile.mkdtemp(dir=self.work_dir_))
+        with work_dir(self.work_dir_) as run_dir:
+            # We are already in tmp_dir (run_dir) at this point.
+            self.tracer_info << f"We are using temporary directory: {run_dir} \n" and self.tracer_info.flush()
 
-        # Keep a copy of the pose as handed to us, so reslabels set by earlier
-        # movers can be carried forward onto every designed sequence below -
-        # LigandMPNN output pdbs carry no pdb_info at all.
-        input_pose = pose.clone()
+            # Keep a copy of the pose as handed to us, so reslabels set by earlier
+            # movers can be carried forward onto every designed sequence below -
+            # LigandMPNN output pdbs carry no pdb_info at all.
+            input_pose = pose.clone()
 
-        pyrosetta.dump_pdb(pose, str(run_dir / 'input.pdb'))
+            pyrosetta.dump_pdb(pose, 'input.pdb')
 
-        # Residue lists from a label are merged with any given literally.
-        residue_lists = {
-            "fixed_residues": self._merge_residues(
-                self.options_.get("fixed_residues", ""),
-                self._residues_for_label(pose, self.fixed_reslabel_),
-            ),
-            "redesigned_residues": self._merge_residues(
-                self.options_.get("redesigned_residues", ""),
-                self._residues_for_label(pose, self.redesigned_reslabel_),
-            ),
-        }
+            # Residue lists from a label are merged with any given literally.
+            residue_lists = {
+                "fixed_residues": self._merge_residues(
+                    self.options_.get("fixed_residues", ""),
+                    self._residues_for_label(pose, self.fixed_reslabel_),
+                ),
+                "redesigned_residues": self._merge_residues(
+                    self.options_.get("redesigned_residues", ""),
+                    self._residues_for_label(pose, self.redesigned_reslabel_),
+                ),
+            }
 
-        ligmpnn_cmd_str = (
-            f"singularity run --nv"
-            f" -B {run_dir}:/output"
-            f" {self.ligandmpnn_path_}"
-            f" --model_type {self.model_type_}"
-            f" --pdb_path /output/input.pdb"
-            f" --out_folder /output"
-            f" --checkpoint_protein_mpnn {self.checkpoint_protein_mpnn_}"
-            f" --batch_size {self.batch_size_}"
-            f" --number_of_batches {self.number_of_batches_}"
-        )
-        for name, value in self.options_.items():
-            value = residue_lists.get(name, value)
-            if value != "" and value is not None:
-                # Quoted: symmetry_residues and the residue lists contain
-                # pipes and spaces.
-                ligmpnn_cmd_str += f' --{name} "{value}"'
-        if self.extra_args_:
-            ligmpnn_cmd_str += f" {self.extra_args_}"
+            ligmpnn_cmd_str = (
+                f"{self.run_command_}"
+                f" --model_type {self.model_type_}"
+                f" --pdb_path input.pdb"
+                f" --out_folder ."
+                f" --checkpoint_protein_mpnn {self.checkpoint_protein_mpnn_}"
+                f" --batch_size {self.batch_size_}"
+                f" --number_of_batches {self.number_of_batches_}"
+            )
+            for name, value in self.options_.items():
+                value = residue_lists.get(name, value)
+                if value != "" and value is not None:
+                    # Quoted: symmetry_residues and the residue lists contain
+                    # pipes and spaces.
+                    ligmpnn_cmd_str += f' --{name} "{value}"'
+            if self.extra_args_:
+                ligmpnn_cmd_str += f" {self.extra_args_}"
 
-        for name, value in residue_lists.items():
-            if value:
-                self.tracer_info << f"{name}: {value}\n" and self.tracer_info.flush()
+            for name, value in residue_lists.items():
+                if value:
+                    self.tracer_info << f"{name}: {value}\n" and self.tracer_info.flush()
 
-        run_and_log(ligmpnn_cmd_str, self.tracer_info, self.tracer_error)
+            run_and_log(ligmpnn_cmd_str, self.tracer_info, self.tracer_error)
 
-        # backbones/ carries backbone atoms only; packed/ is written instead
-        # when LigandMPNN builds sidechains.
-        packing = str(self.options_.get("pack_side_chains", "")).strip() in TRUE_VALUES
-        output_dir = run_dir / ("packed" if packing else "backbones")
-        pdb_files = sorted(output_dir.glob('*.pdb'))  # _0, _1, _10, _2, _3 ...
-        if not pdb_files:
-            self.tracer_error << f"No .pdb files found in output directory {output_dir} \n" and self.tracer_error.flush()
-            raise Exception(f"No .pdb files found in output directory {output_dir}")
-        self.tracer_info << f"Found .pdb files: {[str(pdb) for pdb in pdb_files]} \n" and self.tracer_info.flush()
+            # backbones/ carries backbone atoms only; packed/ is written instead
+            # when LigandMPNN builds sidechains.
+            packing = str(self.options_.get("pack_side_chains", "")).strip() in TRUE_VALUES
+            output_dir = Path("packed" if packing else "backbones")
+            pdb_files = sorted(output_dir.glob('*.pdb'))  # _0, _1, _10, _2, _3 ...
+            if not pdb_files:
+                self.tracer_error << f"No .pdb files found in output directory {output_dir} \n" and self.tracer_error.flush()
+                raise Exception(f"No .pdb files found in output directory {output_dir}")
+            self.tracer_info << f"Found .pdb files: {[str(pdb) for pdb in pdb_files]} \n" and self.tracer_info.flush()
 
-        designed_poses = [self._load_and_label_design(pdb_file, input_pose) for pdb_file in pdb_files]
+            designed_poses = [self._load_and_label_design(pdb_file, input_pose) for pdb_file in pdb_files]
 
-        # Primary output: the pose the caller already holds a reference to
-        # gets the first designed sequence.
-        pose.assign(designed_poses[0])
+            # Primary output: the pose the caller already holds a reference to
+            # gets the first designed sequence.
+            pose.assign(designed_poses[0])
 
-        # Every further sequence is handed off through
-        # Mover::get_additional_output(), the standard Rosetta one-to-many
-        # mechanism, instead of being silently discarded.
-        self.additional_poses_ = list(designed_poses[1:])
-
-        try:
-            if temp_dir:
-                temp_dir.cleanup()
-                self.tracer_debug << f"Cleaned up temporary directory {run_dir} \n" and self.tracer_debug.flush()
-            elif self.delete_dir_:
-                shutil.rmtree(run_dir)
-                self.tracer_debug << f"Deleted run directory {run_dir} \n" and self.tracer_debug.flush()
-        except Exception:
-            self.tracer_debug << f"Failed to clean up {run_dir} \n" and self.tracer_debug.flush()
+            # Every further sequence is handed off through
+            # Mover::get_additional_output(), the standard Rosetta one-to-many
+            # mechanism, instead of being silently discarded.
+            self.additional_poses_ = list(designed_poses[1:])
 
     def _load_and_label_design(self, pdb_file, input_pose):
         """Load one designed sequence and carry over the reslabels of the
@@ -297,14 +272,13 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
         self.tracer_debug << f"Parsing my tag @ LigandMPNN. Self: {self}, tag: {tag}, data: {data} \n" and self.tracer_debug.flush()
         self.model_type_ = tag.get_option_string("model_type") if tag.hasOption("model_type") else "protein_mpnn"
         self.checkpoint_protein_mpnn_ = tag.get_option_string("checkpoint_protein_mpnn") if tag.hasOption("checkpoint_protein_mpnn") else DEFAULT_CHECKPOINT
-        self.ligandmpnn_path_ = tag.get_option_string("ligandmpnn_path")
+        self.run_command_ = tag.get_option_string("run_command")
         self.batch_size_ = tag.get_option_string("batch_size") if tag.hasOption("batch_size") else "1"
         self.number_of_batches_ = tag.get_option_string("number_of_batches") if tag.hasOption("number_of_batches") else "1"
         self.fixed_reslabel_ = tag.get_option_string("fixed_reslabel") if tag.hasOption("fixed_reslabel") else ""
         self.redesigned_reslabel_ = tag.get_option_string("redesigned_reslabel") if tag.hasOption("redesigned_reslabel") else ""
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
-        self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
-        self.delete_dir_ = tag.get_option_bool("delete_dir") if tag.hasOption("delete_dir") else False
+        self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else None
 
         self.options_ = {
             name: (tag.get_option_string(name) if tag.hasOption(name) else "")
@@ -316,14 +290,13 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
             f"Parsed options:\n"
             f"\tmodel_type: {self.model_type_}\n"
             f"\tcheckpoint_protein_mpnn: {self.checkpoint_protein_mpnn_}\n"
-            f"\tligandmpnn_path: {self.ligandmpnn_path_}\n"
+            f"\trun_command: {self.run_command_}\n"
             f"\tbatch_size: {self.batch_size_}\n"
             f"\tnumber_of_batches: {self.number_of_batches_}\n"
             f"\tfixed_reslabel: {self.fixed_reslabel_}\n"
             f"\tredesigned_reslabel: {self.redesigned_reslabel_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
-            f"\tdelete_dir: {self.delete_dir_}\n"
             f"\tLigandMPNN options: {set_options}\n"
         ) and self.tracer_info.flush()
 
@@ -348,9 +321,9 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
             "Model checkpoint",
             DEFAULT_CHECKPOINT))
         attrlist.append(XMLSchemaAttribute.required_attribute(
-            "ligandmpnn_path",
+            "run_command",
             XMLSchemaType(xs_string),
-            "Path to the LigandMPNN singularity image"))
+            "Command that runs LigandMPNN run.py, e.g. singularity run --nv /path/to/ligandmpnn.sif"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "batch_size",
             XMLSchemaType(xs_integer),
@@ -387,13 +360,8 @@ class LigandMPNN(pyrosetta.rosetta.protocols.moves.Mover):
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "work_dir",
             XMLSchemaType(xs_string),
-            "Parent directory under which each apply() call gets its own fresh subdirectory (so this mover instance can safely be applied more than once, e.g. from a RosettaScripts MultiplePoseMover). If attribute not provided, a new tempfile.TemporaryDirectory is used per call instead. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
+            "Directory where the LigandMPNN output will be stored. If attribute not provided, a new tempfile.TemporaryDirectory will be used. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
             ""))
-        attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "delete_dir",
-            XMLSchemaType(xs_boolean),
-            "Whether to delete this call run subdirectory after every designed sequence has been read from disk into the primary pose or the additional-output poses. Ignored (always cleaned up) when work_dir is unset, since a temp directory is used instead.",
-            "false"))
 
         description = '''
                         Runs LigandMPNN to design sequences onto the pose backbone.
