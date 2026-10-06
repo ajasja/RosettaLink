@@ -22,11 +22,11 @@ import numpy as np
 class RFdiffusion(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
-    def __init__(self, contig=None, num_designs=None, rfdiffusion_path=None, extra_args=None, work_dir=None):
+    def __init__(self, contig=None, num_designs=None, run_command=None, extra_args=None, work_dir=None):
         pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
         self.contig_ = contig
         self.num_designs_ = num_designs
-        self.rfdiffusion_path_ = rfdiffusion_path
+        self.run_command_ = run_command
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
         # Populated by apply(): every design beyond the first, exposed to the
@@ -36,13 +36,13 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
 
         self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, self.tracer_debug, self.tracer_trace, *_ = setup_tracer("[RFdiffusion]")
 
-        self.tracer_info << f"Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
+        self.tracer_info << f"Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, run_command: {self.run_command_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
 
     def clone(self):
         copy = RFdiffusion()
         copy.contig_ = self.contig_
         copy.num_designs_ = self.num_designs_
-        copy.rfdiffusion_path_ = self.rfdiffusion_path_
+        copy.run_command_ = self.run_command_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
         RFdiffusion.clones_.append(copy)
@@ -62,8 +62,7 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
             pyrosetta.dump_pdb(pose, str('input.pdb'))
 
 
-            rfdiff_cmd_str = f"singularity run --nv \
-                {self.rfdiffusion_path_} \
+            rfdiff_cmd_str = f"{self.run_command_} \
                 inference.schedule_directory_path=output/schedules \
                 inference.output_prefix=output/ \
                 'contigmap.contigs={self.contig_}' \
@@ -187,11 +186,11 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         self.tracer_debug << f"Parsing my tag @ RFdiffusion. Self: {self}, tag: {tag}, data: {data} \n" and self.tracer_debug.flush()
         self.contig_ = tag.get_option_string("contig")
         self.num_designs_ = tag.get_option_int("num_designs")
-        self.rfdiffusion_path_ = tag.get_option_string("rfdiffusion_path")
+        self.run_command_ = tag.get_option_string("run_command")
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
 
-        self.tracer_info << f"Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
+        self.tracer_info << f"Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, run_command: {self.run_command_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
 
 
 
@@ -214,7 +213,7 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
             XMLSchemaType(xs_integer),
             "Number of designs to generate"))
         attrlist.append(XMLSchemaAttribute.required_attribute(
-            "rfdiffusion_path",
+            "run_command",
             XMLSchemaType(xs_string),
             "Path to the RFdiffusion executable or Docker image"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(

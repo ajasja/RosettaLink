@@ -37,7 +37,7 @@ class BaseLinkMover(pyrosetta.rosetta.protocols.moves.Mover):
         attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
 
         description = '''
-                        Your mover's parent to automatically create a temp dir, cd to there (so singularity containers automatically bind needed folders), and then cd back to the original working directory.
+                        To be determined.
                       '''
 
         pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes(
