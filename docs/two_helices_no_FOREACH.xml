@@ -1,0 +1,123 @@
+<!--
+  docs/two_helices.xml without FOR_EACH_POSE, so it runs on a stock PyRosetta
+  release.
+
+      rosetta_link_scripts \
+          -parser:protocol docs/two_helices_no_FOREACH.xml \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/two_helices \
+          -var contig=[B1-150/0 90-120] \
+          -var num_backbones=2 \
+          -var num_sequences=3
+
+  FOR_EACH_POSE is an alias for MultiplePoseMover that adds a PROTOCOLS
+  subtag, so the same per pose scoring is had by wrapping a nested
+  ROSETTASCRIPTS in a MultiplePoseMover instead. The two forms produce the
+  same output; this one costs the duplication below.
+
+  A nested ROSETTASCRIPTS has its own parse scope: the score function, the
+  selector, the filters and the simple metric used inside it are declared
+  again there and cannot be shared with the outer script. Change one and
+  change the other.
+
+  Everything above the scoring stage is identical to two_helices.xml. See
+  that file for the labels, the batching and what each metric reports.
+-->
+<ROSETTASCRIPTS>
+
+    <SCOREFXNS>
+        <ScoreFunction name="sfxn" weights="ref2015" />
+    </SCOREFXNS>
+
+    <RESIDUE_SELECTORS>
+        <True name="full_pose" />
+        <ResiduePDBInfoHasLabel name="rfd_new_backbone" property="rfd_new_backbone" />
+        <ResiduePDBInfoHasLabel name="rfd_fixed" property="rfd_fixed" />
+        <ResiduePDBInfoHasLabel name="rfd_hidden_sidechains" property="rfd_hidden_sidechains" />
+        <Neighborhood name="near_rfd_new_backbone" selector="rfd_new_backbone" distance="10.0" />
+        <Or name="redesign_these"
+            selectors="rfd_new_backbone,rfd_hidden_sidechains,near_rfd_new_backbone" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <RFdiffusion name="design_backbone"
+            contig="{contig}"
+            num_designs="{num_backbones}"
+            batch="true"
+            prefix_name="rfd_"
+            extra_args="inference.input_pdb=input.pdb"
+            work_dir="01_rfdiff" />
+
+        <LigandMPNN name="design_sequence"
+            batch="true"
+            batch_size="{num_sequences}"
+            residues_to_design="redesign_these"
+            prefix_name="mpnn_"
+            work_dir="02_LigandMPNN" />
+
+        <ColabFold name="predict_structure"
+            batch="true"
+            models="1,2"
+            msa_mode="single_sequence"
+            rank="auto"
+            prefix_name="AF2_"
+            replace_pose="true"
+            work_dir="03_colabfold">
+
+            <RMSD name="scRMSD_all" calculation="rfd_all" />
+            <RMSD name="scRMSD_motif" calculation="rfd_motif" />
+            <RMSD name="scRMSD_new_backbone" calculation="rfd_new_backbone" />
+            <RMSD name="scRMSD_new_backbone_on_fixed"
+                  calculation="rfd_new_backbone" alignment="rfd_fixed" />
+
+            <metric name="plddt_all" selector="rfd_all" />
+            <metric name="plddt_motif" selector="rfd_motif" />
+            <metric name="plddt_new_backbone" selector="rfd_new_backbone" />
+
+            <metric name="pAE_all" selector="rfd_all" />
+            <metric name="pAE_motif" selector="rfd_motif" />
+            <metric name="pAE_new_backbone" selector="rfd_new_backbone" />
+        </ColabFold>
+
+        <MultiplePoseMover name="score_each_design">
+            <ROSETTASCRIPTS>
+                <SCOREFXNS>
+                    <ScoreFunction name="sfxn" weights="ref2015" />
+                </SCOREFXNS>
+                <RESIDUE_SELECTORS>
+                    <True name="full_pose" />
+                </RESIDUE_SELECTORS>
+                <SIMPLE_METRICS>
+                    <SapScoreMetric name="sap_score"
+                        score_selector="full_pose"
+                        sap_calculate_selector="full_pose"
+                        sasa_selector="full_pose" />
+                </SIMPLE_METRICS>
+                <FILTERS>
+                    <LongestContinuousApolarSegment name="apolar_segment"
+                        residue_selector="full_pose"
+                        confidence="0" />
+                    <NetCharge name="netcharge" confidence="0" />
+                    <BuriedUnsatHbonds2 name="buried_unsat"
+                        scorefxn="sfxn"
+                        jump_number="0"
+                        confidence="0" />
+                </FILTERS>
+                <PROTOCOLS>
+                    <Add metrics="sap_score" />
+                    <Add filter="apolar_segment" />
+                    <Add filter="netcharge" />
+                    <Add filter="buried_unsat" />
+                </PROTOCOLS>
+            </ROSETTASCRIPTS>
+        </MultiplePoseMover>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+        <Add mover="design_sequence" />
+        <Add mover="predict_structure" />
+        <Add mover="score_each_design" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
