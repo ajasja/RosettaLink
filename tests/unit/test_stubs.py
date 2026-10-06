@@ -115,11 +115,12 @@ def test_an_invocation_without_both_positionals_is_an_error():
 		colabfold_stub.positional(["--rank", "auto", "input.fasta"])
 
 
-def test_record_ids_are_the_fasta_headers(tmp_path):
+def test_record_ids_carry_the_header_and_the_total_length(tmp_path):
 	fasta = tmp_path / "input.fasta"
 	fasta.write_text(">design_0\nAAAA:CCCC\n>design_1\nGGGG\n")
 
-	assert colabfold_stub.record_ids(fasta) == ["design_0", "design_1"]
+	# The chain separator is not a residue, so the complex is 8 long.
+	assert colabfold_stub.record_ids(fasta) == [("design_0", 8), ("design_1", 4)]
 
 
 def test_a_missing_fasta_is_an_error(tmp_path):
@@ -144,19 +145,28 @@ def test_a_record_id_containing_an_underscore_is_replaced_whole():
 
 
 def test_the_recording_of_the_same_record_is_preferred():
-	recorded = [
-		Path("design_0_unrelaxed_rank_001_x.pdb"),
-		Path("design_1_unrelaxed_rank_001_x.pdb"),
-	]
+	recorded = {"design_0": 100, "design_1": 250}
 
-	chosen = colabfold_stub.recorded_for(recorded, "design_1", 0, "_unrelaxed_rank_001")
-
-	assert chosen.name.startswith("design_1_")
+	assert colabfold_stub.choose(recorded, "design_1", 250, 0) == "design_1"
 
 
-def test_a_record_the_recording_did_not_have_falls_back_in_order():
-	recorded = [Path("design_0_unrelaxed_rank_001_x.pdb")]
+def test_the_same_name_does_not_win_against_the_right_length():
+	# A wider fan out than the recording reuses names for designs of a
+	# different length, so the name alone is not enough.
+	recorded = {"design_0": 249, "design_1": 250}
 
-	chosen = colabfold_stub.recorded_for(recorded, "design_9", 0, "_unrelaxed_rank_001")
+	assert colabfold_stub.choose(recorded, "design_1", 249, 0) == "design_0"
 
-	assert chosen == recorded[0]
+
+def test_an_unrecorded_record_takes_a_recording_of_its_own_length():
+	# A prediction of the wrong length cannot stand in for this one: the RMSD
+	# metrics select on both structures and need them to match.
+	recorded = {"design_0": 249, "design_1": 250}
+
+	assert colabfold_stub.choose(recorded, "design_5", 250, 0) == "design_1"
+
+
+def test_a_length_no_recording_has_falls_back_in_order():
+	recorded = {"design_0": 249}
+
+	assert colabfold_stub.choose(recorded, "design_9", 400, 0) == "design_0"

@@ -67,3 +67,26 @@ copied as a pair.
 
 Re-record when a protocol's inputs or its per-stage counts change, since a
 fixture is replayed against the input it was recorded from.
+
+## When the fan out is wider than the recording
+
+A record id is a position in the batch, not an identity: `design_2` of a four
+pose run and `design_2` of a six pose run are different designs, usually of
+different length.
+
+Asked for more records than were recorded, the ColabFold stub reuses
+recordings rather than failing, picking one of the same residue count. The
+count has to match, because the mover measures its RMSDs between the
+prediction and the pose it was folded from and Rosetta rejects the pair when
+the two differ in length.
+
+**A run that relies on this is weaker than it looks.** Some output structures
+are byte for byte copies of each other, so nothing may treat the outputs as
+independent designs or count distinct values among them. Every reuse prints a
+warning on stderr and the stub prints a summary line at the end; a run that
+needs no reuse prints neither.
+
+The binder fixture holds four ColabFold predictions, recorded at two
+sequences per backbone. `docs/two_helices.xml` asks for three, so replaying it
+reuses two recordings. Recording a fixture at that protocol's own counts
+removes the reuse and makes this fallback inert.
