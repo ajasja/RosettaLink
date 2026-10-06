@@ -10,7 +10,7 @@ BASE_DIR = 'rosettalink'
 # Dictionary to organize modules by project directories with relative paths
 REGISTRATION_MODULES = {
     'movers': [
-        'RFDiffusion',
+        'RFdiffusion',
         'LigandMPNN',
         'ColabFold',
         'Boltz2',

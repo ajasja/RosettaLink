@@ -1,10 +1,10 @@
 # @file examples/demo_full_pipeline_single_xml_extended.py
 # @brief Same single-XML pipeline as demo_full_pipeline_single_xml.py
-#        (RFDiffusion -> LigandMPNN -> ColabFold, fully fanned out through
+#        (RFdiffusion -> LigandMPNN -> ColabFold, fully fanned out through
 #        nested MultiplePoseMovers), extended to compute six metrics per
 #        final design and report them all in one CSV:
 #          A) self-consistency RMSD (scRMSD): RMSD of the ColabFold-predicted
-#             structure back to the original RFDiffusion backbone it is
+#             structure back to the original RFdiffusion backbone it is
 #             based on. LigandMPNN only changes residue identity, never
 #             backbone coordinates, so the pose ColabFold is handed (its own
 #             "input_pose", captured right before folding) IS that original
@@ -18,8 +18,8 @@
 # A) and B) are computed by the ColabFold mover itself (it already has a
 # built-in <RMSD> sub-tag and always reports pLDDT) - the only piece that was
 # actually missing was a residue label spanning the WHOLE chain to RMSD over:
-# RFDiffusion's inpaint_seq/inpaint_str labels are both empty for a fully
-# unconditional design (nothing is "kept" from an input), so RFDiffusion.py
+# RFdiffusion's inpaint_seq/inpaint_str labels are both empty for a fully
+# unconditional design (nothing is "kept" from an input), so RFdiffusion.py
 # now also stamps every residue with an "all" label (same convention already
 # used by hand in examples/demo_colabfold.py) that survives through
 # LigandMPNN into ColabFold's RMSD comparison.
@@ -70,7 +70,7 @@ LIGANDMPNN_SIF = "/home/folivieri/prosculpt/singularity_files/ligandmpnn.sif"
 COLABFOLD_SIF = "/home/folivieri/prosculpt/singularity_files/colabfold.sif"
 COLABFOLD_CMD_HEADER = f"/home/aljubetic/AF2/CF2.3/colabfold-conda/bin/colabfold_batch"
 
-NUM_BACKBONES = 2              # RFDiffusion num_designs
+NUM_BACKBONES = 2              # RFdiffusion num_designs
 NUM_SEQUENCES_PER_BACKBONE = 3 # LigandMPNN batch_size (per backbone)
 BACKBONE_LENGTH = 60           # residues; unconditional design (no motif)
 CONTIG = f"[{BACKBONE_LENGTH}-{BACKBONE_LENGTH}]"
@@ -80,7 +80,7 @@ METRICS_CSV = OUTPUT_DIR / "metrics.csv"
 
 # --------------------------------------------------------------------------- #
 # One protocol, top to bottom:
-#   make_backbone            (RFDiffusion, N backbones)
+#   make_backbone            (RFdiffusion, N backbones)
 #   -> design_sequences       (MultiplePoseMover: collects all N backbones)
 #        -> make_sequence     (LigandMPNN, M sequences per backbone)
 #        -> predict_structures (MultiplePoseMover: collects all M sequences)
@@ -92,7 +92,7 @@ PIPELINE_XML_TEMPLATE = """
 <ROSETTASCRIPTS>
 
     <MOVERS>
-        <RFDiffusion name="make_backbone"
+        <RFdiffusion name="make_backbone"
             contig="{contig}"
             num_designs="{num_backbones}"
             rfdiffusion_path="{rfdiffusion_path}"
@@ -196,7 +196,7 @@ xml = XmlObjects.create_from_string(xml_string)
 protocol = xml.get_mover("ParsedProtocol")
 
 # Starting pose is only used to write a placeholder input.pdb; since no
-# inference.input_pdb/contigmap motif is given, RFDiffusion ignores its
+# inference.input_pdb/contigmap motif is given, RFdiffusion ignores its
 # contents entirely and diffuses de novo backbones from noise.
 seed_pose = pyrosetta.pose_from_sequence("A" * BACKBONE_LENGTH)
 protocol.apply(seed_pose)

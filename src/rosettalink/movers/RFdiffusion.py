@@ -1,5 +1,5 @@
-# @file movers/RFDiffusion.py
-# @brief Rosetta mover to run RFDiffusion
+# @file movers/RFdiffusion.py
+# @brief Rosetta mover to run RFdiffusion
 
 import os
 import shutil
@@ -8,7 +8,8 @@ import pyrosetta
 from rosettalink.decorators import register_mover
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
-from pyrosetta.rosetta.protocols.residue_selectors import StoreResidueSubsetMover
+from rosettalink.utils import work_dir
+import rosettalink.movers.BaseLinkMover as BaseLinkMover
 from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector, FalseResidueSelector
 
 
@@ -18,105 +19,85 @@ import pickle
 import numpy as np
 
 
-class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
+class RFdiffusion(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
-    def __init__(self, contig=None, num_designs=None, rfdiffusion_path=None, extra_args=None, work_dir=None, delete_dir=None):
+    def __init__(self, contig=None, num_designs=None, run_command=None, extra_args=None, work_dir=None):
         pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
         self.contig_ = contig
         self.num_designs_ = num_designs
-        self.rfdiffusion_path_ = rfdiffusion_path
+        self.run_command_ = run_command
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
-        self.delete_dir_ = delete_dir
         # Populated by apply(): every design beyond the first, exposed to the
         # rest of the Rosetta suite (JD2, RosettaScripts, ...) via the
         # standard Mover::get_additional_output() one-to-many mechanism.
         self.additional_poses_ = None
 
-        self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, self.tracer_debug, self.tracer_trace, *_ = setup_tracer("[RFDiffusion]")
+        self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, self.tracer_debug, self.tracer_trace, *_ = setup_tracer("[RFdiffusion]")
 
-        self.tracer_info << f"Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_} \n" and self.tracer_info.flush()
+        self.tracer_info << f"Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, run_command: {self.run_command_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
 
     def clone(self):
-        copy = RFDiffusion()
+        copy = RFdiffusion()
         copy.contig_ = self.contig_
         copy.num_designs_ = self.num_designs_
-        copy.rfdiffusion_path_ = self.rfdiffusion_path_
+        copy.run_command_ = self.run_command_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
-        copy.delete_dir_ = self.delete_dir_
-        RFDiffusion.clones_.append(copy)
+        RFdiffusion.clones_.append(copy)
         return copy
 
     def apply(self, pose):
-        # Fresh, self-cleaning temp directory every call (or a fresh
-        # subdirectory of a configured work_dir) - never stored back onto
-        # self.work_dir_, so this mover instance can safely be applied more
-        # than once (e.g. from a RosettaScripts MultiplePoseMover).
-        if self.work_dir_ is None or self.work_dir_ == "":
-            temp_dir = tempfile.TemporaryDirectory()
-            run_dir = Path(temp_dir.name)
-            self.tracer_info << f"No work directory specified, using temporary directory: {run_dir} \n" and self.tracer_info.flush()
-        else:
-            temp_dir = None
-            os.makedirs(self.work_dir_, exist_ok=True)
-            run_dir = Path(tempfile.mkdtemp(dir=self.work_dir_))
-        os.makedirs(run_dir/'schedules', exist_ok=True)
+        with work_dir(self.work_dir_) as run_dir:
+            # We are already in tmp_dir (run_dir) at this point.
+            self.tracer_info << f"Current working directory: {os.getcwd()} \n" and self.tracer_info.flush()
 
-        # Save input pose to run_dir, so we can input it into RfDiff
-        pyrosetta.dump_pdb(pose, str(run_dir/'input.pdb'))
+            os.makedirs("output", exist_ok=True)
+            os.makedirs("output/schedules", exist_ok=True)
 
-        rfdiff_cmd_str = f"singularity run --nv \
-            -B {run_dir}:/output \
-            {self.rfdiffusion_path_} \
-            inference.schedule_directory_path=/output/schedules \
-            inference.output_prefix=/output/ \
-            'contigmap.contigs={self.contig_}' \
-            inference.num_designs={self.num_designs_} \
-            {self.extra_args_ if self.extra_args_ else ''} \
-            -cd /output"   # IMPORTANT: Needs to be within container (with leading slash): self.work_dir_ => /output/
-            
-        run_and_log(rfdiff_cmd_str, self.tracer_info, self.tracer_error)
-        # RFDiffusion writes a .trb next to every design, and the input pose
-        # was dumped into this same directory, so key off the .trb rather
-        # than picking up input.pdb as if it were a design.
-        output_dir = run_dir
-        pdb_files = sorted(
-            f for f in output_dir.glob('*.pdb') if f.with_suffix('.trb').is_file()
-        )  # _0, _1, _10, _2, _3 ...
-        if not pdb_files:
-            self.tracer_error << f"No .pdb files found in output directory {output_dir} \n" and self.tracer_error.flush()
-            raise Exception(f"No .pdb files found in output directory {output_dir}")
-        self.tracer_info << f"Found .pdb files: {[str(pdb) for pdb in pdb_files]} \n" and self.tracer_info.flush()
+            # Save input pose to run_dir, so we can input it into RfDiff
+            pyrosetta.dump_pdb(pose, str('input.pdb'))
 
-        designed_poses = [self._load_and_label_design(pdb_file) for pdb_file in pdb_files]
 
-        # Primary output: the pose the caller (RosettaScripts/JD2/plain python)
-        # already holds a reference to gets the first design, exactly as before.
-        pose.assign(designed_poses[0])
+            rfdiff_cmd_str = f"{self.run_command_} \
+                inference.schedule_directory_path=output/schedules \
+                inference.output_prefix=output/ \
+                'contigmap.contigs={self.contig_}' \
+                inference.num_designs={self.num_designs_} \
+                {self.extra_args_ if self.extra_args_ else ''} \
+                -cd output"   # IMPORTANT: Needs to be outside container (without leading slash)
+                
+            run_and_log(rfdiff_cmd_str, self.tracer_info, self.tracer_error)
+            # RFdiffusion writes a .trb next to every design, and the input pose
+            # was dumped into this same directory, so key off the .trb rather
+            # than picking up input.pdb as if it were a design.
+            output_dir = Path("output")
+            pdb_files = sorted(
+                f for f in output_dir.glob('*.pdb') if f.with_suffix('.trb').is_file()
+            )  # _0, _1, _10, _2, _3 ...
+            if not pdb_files:
+                self.tracer_error << f"No .pdb files found in output directory {output_dir} \n" and self.tracer_error.flush()
+                raise Exception(f"No .pdb files found in output directory {output_dir}")
+            self.tracer_info << f"Found .pdb files: {[str(pdb) for pdb in pdb_files]} \n" and self.tracer_info.flush()
 
-        # Every further design is handed off through Mover::get_additional_output(),
-        # the standard Rosetta mechanism for one-to-many movers: JD2's job
-        # distributor (and therefore rosetta_scripts, RosettaScripts-driven
-        # PyRosetta code, MultiplePoseMover, etc.) automatically drains this
-        # after apply() and emits one output structure per pose, exactly like
-        # any other native multi-output mover. This replaces silently
-        # discarding every design past the first.
-        self.additional_poses_ = list(designed_poses[1:])
+            designed_poses = [self._load_and_label_design(pdb_file) for pdb_file in pdb_files]
 
-        try:
-            if temp_dir:
-                temp_dir.cleanup()
-                self.tracer_debug << f"Cleaned up temporary directory {run_dir} \n" and self.tracer_debug.flush()
-            elif self.delete_dir_:
-                shutil.rmtree(run_dir)
-                self.tracer_debug << f"Deleted run directory {run_dir} \n" and self.tracer_debug.flush()
-        except Exception:
-            self.tracer_debug << f"Failed to clean up {run_dir} \n" and self.tracer_debug.flush()
+            # Primary output: the pose the caller (RosettaScripts/JD2/plain python)
+            # already holds a reference to gets the first design, exactly as before.
+            pose.assign(designed_poses[0])
+
+            # Every further design is handed off through Mover::get_additional_output(),
+            # the standard Rosetta mechanism for one-to-many movers: JD2's job
+            # distributor (and therefore rosetta_scripts, RosettaScripts-driven
+            # PyRosetta code, MultiplePoseMover, etc.) automatically drains this
+            # after apply() and emits one output structure per pose, exactly like
+            # any other native multi-output mover. This replaces silently
+            # discarding every design past the first.
+            self.additional_poses_ = list(designed_poses[1:])
 
     def _load_and_label_design(self, pdb_file):
-        """Load a single RFDiffusion output .pdb and stamp it with the same
+        """Load a single RFdiffusion output .pdb and stamp it with the same
         inpaint_seq/inpaint_str pose-cache subsets and pdb_info reslabels that
         the rest of the suite (selectors, downstream movers/filters) expects,
         regardless of whether this design ends up as the primary output pose
@@ -178,7 +159,6 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         # ResiduePDBInfoHasLabelSelector. A label matching no residue is left
         # off entirely rather than stamped as empty.
         for label, resnums in labelled:
-            StoreResidueSubsetMover(resnum_selector(resnums), label, True).apply(pose)
             if not resnums:
                 continue
             for resnum in sorted(resnums):
@@ -201,21 +181,20 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
         return self.mover_name()
 
     def parse_my_tag(self, tag, data):
-        self.tracer_debug << f"Parsing my tag @ RFDiffusion. Self: {self}, tag: {tag}, data: {data} \n" and self.tracer_debug.flush()
+        self.tracer_debug << f"Parsing my tag @ RFdiffusion. Self: {self}, tag: {tag}, data: {data} \n" and self.tracer_debug.flush()
         self.contig_ = tag.get_option_string("contig")
         self.num_designs_ = tag.get_option_int("num_designs")
-        self.rfdiffusion_path_ = tag.get_option_string("rfdiffusion_path")
+        self.run_command_ = tag.get_option_string("run_command")
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
-        self.delete_dir_ = tag.get_option_bool("delete_dir")
 
-        self.tracer_info << f"Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, rfdiffusion_path: {self.rfdiffusion_path_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_}, delete_dir: {self.delete_dir_} \n" and self.tracer_info.flush()
-    
+        self.tracer_info << f"Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, run_command: {self.run_command_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
+
 
 
     @staticmethod
     def mover_name():
-        return "RFDiffusion"
+        return "RFdiffusion"
 
     @classmethod
     def provide_xml_schema(cls, xsd):
@@ -232,26 +211,22 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
             XMLSchemaType(xs_integer),
             "Number of designs to generate"))
         attrlist.append(XMLSchemaAttribute.required_attribute(
-            "rfdiffusion_path",
+            "run_command",
             XMLSchemaType(xs_string),
-            "Path to the RFDiffusion executable or Docker image"))
+            "Path to the RFdiffusion executable or Docker image"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "extra_args",
             XMLSchemaType(xs_string),
-            "Extra arguments for the RFDiffusion executable, e.g. diffuser.T=99999",
+            "Extra arguments for the RFdiffusion executable, e.g. diffuser.T=99999",
             ""))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "work_dir",
             XMLSchemaType(xs_string),
-            "Directory where the RFDiffusion output will be stored. If attribute not provided, a new tempfile.TemporaryDirectory will be used. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
+            "Directory where the RFdiffusion output will be stored. If attribute not provided, a new tempfile.TemporaryDirectory will be used. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
             ""))
-        attrlist.append(XMLSchemaAttribute.required_attribute(
-            "delete_dir",
-            XMLSchemaType(xs_boolean),
-            "Whether to delete the work directory after the run (after every design has been read from disk into the primary pose or the additional-output poses)"))
 
         description = '''
-                        Runs RFDiffusion to generate backbone designs.
+                        Runs RFdiffusion to generate backbone designs.
                       '''
 
         pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes(
@@ -261,20 +236,20 @@ class RFDiffusion(pyrosetta.rosetta.protocols.moves.Mover):
 
 
 @register_mover
-class RFDiffusionCreator(pyrosetta.rosetta.protocols.moves.MoverCreator):
+class RFdiffusionCreator(pyrosetta.rosetta.protocols.moves.MoverCreator):
     instances_ = list()
 
     def __init__(self):
         pyrosetta.rosetta.protocols.moves.MoverCreator.__init__(self)
 
     def create_mover(self):
-        mover = RFDiffusion()
+        mover = RFdiffusion()
         self.instances_.append(mover)
         return mover
 
     def keyname(self):
-        return RFDiffusion.mover_name()
+        return RFdiffusion.mover_name()
 
     def provide_xml_schema(self, xsd):
-        RFDiffusion.provide_xml_schema(xsd)
+        RFdiffusion.provide_xml_schema(xsd)
 

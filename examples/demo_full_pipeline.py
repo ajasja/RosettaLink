@@ -1,14 +1,14 @@
 # @file examples/demo_full_pipeline.py
-# @brief End-to-end demo: RFDiffusion (unconditional backbone generation)
+# @brief End-to-end demo: RFdiffusion (unconditional backbone generation)
 #        -> LigandMPNN (sequence design) -> ColabFold (structure prediction)
 #
 # Generates NUM_BACKBONES de novo backbones from scratch (no input structure,
 # no motif/contig scaffolding), designs a sequence for each with LigandMPNN,
 # then predicts the structure of each designed sequence with ColabFold.
 #
-# NOTE on current mover behaviour: RFDiffusion.apply() only ever pulls the
+# NOTE on current mover behaviour: RFdiffusion.apply() only ever pulls the
 # *first* (alphabetically sorted) output .pdb file into the pose, even if
-# num_designs > 1 (see the "TODO: multi-pose" comment in RFDiffusion.py).
+# num_designs > 1 (see the "TODO: multi-pose" comment in RFdiffusion.py).
 # So to get NUM_BACKBONES independent backbones we call the mover once per
 # backbone with num_designs="1", rather than once with num_designs="2".
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pyrosetta
 import rosettalink
-from rosettalink.movers.RFDiffusion import RFDiffusion
+from rosettalink.movers.RFdiffusion import RFdiffusion
 from rosettalink.movers.LigandMPNN import LigandMPNN
 from rosettalink.movers.ColabFold import ColabFold
 
@@ -59,11 +59,11 @@ for i in range(NUM_BACKBONES):
     print(f"\n=== Design {i}: generating backbone ({BACKBONE_LENGTH} residues, unconditional) ===")
 
     # Starting pose is only used to write a placeholder input.pdb; since no
-    # inference.input_pdb/contigmap motif is given, RFDiffusion ignores its
+    # inference.input_pdb/contigmap motif is given, RFdiffusion ignores its
     # contents entirely and diffuses a de novo backbone from noise.
     pose = pyrosetta.pose_from_sequence("A" * BACKBONE_LENGTH)
 
-    rfdiff_mover = RFDiffusion(
+    rfdiff_mover = RFdiffusion(
         contig=CONTIG,
         num_designs="1",
         rfdiffusion_path=RFDIFFUSION_SIF,

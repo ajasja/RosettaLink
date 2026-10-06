@@ -88,7 +88,7 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         self.delete_dir_ = delete_dir
         # Populated by apply(): every design beyond the first (diffusion_samples > 1),
         # exposed via the standard Mover::get_additional_output() mechanism -
-        # same one-to-many pattern as RFDiffusion/LigandMPNN.
+        # same one-to-many pattern as RFdiffusion/LigandMPNN.
         self.additional_poses_ = []
 
         self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, \
@@ -231,7 +231,7 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
                 for pdb_file in pdb_files
             )
 
-        # Primary output: same convention as RFDiffusion/LigandMPNN - the
+        # Primary output: same convention as RFdiffusion/LigandMPNN - the
         # pose the caller already holds a reference to gets the first design.
         pose.assign(designed_poses[0])
 

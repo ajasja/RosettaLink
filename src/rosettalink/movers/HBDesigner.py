@@ -131,7 +131,7 @@ class HBDesigner(pyrosetta.rosetta.protocols.moves.Mover):
         self.options_ = {name: options.get(name, "") for name in OPTION_HELP}
         # Populated by apply(): every network beyond the best one, exposed
         # via the standard Mover::get_additional_output() mechanism - same
-        # one-to-many pattern as RFDiffusion/LigandMPNN.
+        # one-to-many pattern as RFdiffusion/LigandMPNN.
         self.additional_poses_ = []
 
         self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, \

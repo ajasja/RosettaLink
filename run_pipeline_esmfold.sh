@@ -22,7 +22,7 @@ conda activate "$CONDA_ENV"
 echo "python: $(which python)"
 echo "env:    $CONDA_PREFIX"
 
-# Checked here so a wrong env fails in seconds rather than after RFDiffusion
+# Checked here so a wrong env fails in seconds rather than after RFdiffusion
 # and LigandMPNN have run.
 python -c "import esm.models.esmfold2" 2>/dev/null \
     || { echo "ERROR: $CONDA_PREFIX has no esm.models.esmfold2 (needs esm 3.4.0+)"; exit 1; }
