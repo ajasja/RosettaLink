@@ -16,6 +16,9 @@ dependencies = [
     "pyyaml",
 ]
 
+[project.scripts]
+rosetta_link_scripts = "rosettalink.scripts.run_xml:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
