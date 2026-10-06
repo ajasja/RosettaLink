@@ -17,7 +17,7 @@ from rosettalink.scripts.run_xml import PLACEHOLDER
 
 ROOT = Path(__file__).absolute().parents[2]
 MOVER_FILES = sorted((ROOT / "src" / "rosettalink" / "movers").glob("*.py"))
-XML_FILES = sorted((ROOT / "examples").glob("*.xml"))
+XML_FILES = sorted((ROOT / "examples").glob("*.xml")) + sorted((ROOT / "docs").glob("*.xml"))
 
 # Rosetta adds these to every mover tag itself.
 ALWAYS_ALLOWED = {"name"}
