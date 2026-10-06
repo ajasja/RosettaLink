@@ -1,0 +1,76 @@
+<!--
+  Binder design, every stage batched. See examples/README.md to run it.
+
+  Each mover takes every pose the previous one published and hands its own
+  results on, so LigandMPNN and ColabFold each run once for the whole
+  fan out instead of once per pose:
+
+      make_backbone      1 target       to  N backbones
+      make_sequence      N backbones    to  N*M sequences    (one invocation)
+      predict_structure  N*M sequences  to  N*M predictions  (one invocation)
+
+  run_command is set on no tag, so each comes from the matching section of
+  rosettalink.config.yaml.
+
+  The filters run on the primary pose only. To evaluate every design, wrap
+  them in FOR_EACH_POSE, which needs a Rosetta build carrying
+  RosettaCommons/rosetta pull request 494.
+-->
+<ROSETTASCRIPTS>
+
+    <SCOREFXNS>
+        <ScoreFunction name="sfxn" weights="ref2015" />
+    </SCOREFXNS>
+
+    <RESIDUE_SELECTORS>
+        <True name="full_pose" />
+        <ResiduePDBInfoHasLabel name="designed" property="designed" />
+        <ResiduePDBInfoHasLabel name="fixed_chain" property="fixed_chain" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <RFDiffusion name="make_backbone"
+            contig="{contig}"
+            num_designs="{num_backbones}"
+            batch="true"
+            extra_args="inference.input_pdb=%run_dir%/input.pdb"
+            work_dir="{work_dir}/rfdiffusion"
+            delete_dir="false" />
+
+        <LigandMPNN name="make_sequence"
+            batch="true"
+            batch_size="{num_sequences}"
+            fixed_reslabel="fixed_chain"
+            work_dir="{work_dir}/ligandmpnn"
+            delete_dir="false" />
+
+        <ColabFold name="predict_structure"
+            batch="true"
+            models="1,2"
+            msa_mode="single_sequence"
+            prefix_name="AF2_"
+            work_dir="{work_dir}/colabfold"
+            delete_dir="false">
+            <RMSD name="scRMSD_all" reslabel_input="all" reslabel_prediction="all" />
+            <RMSD name="scRMSD_designed" reslabel_input="designed" reslabel_prediction="designed" />
+            <RMSD name="scRMSD_binder_on_target" reslabel_input="designed" reslabel_prediction="designed"
+                  reslabel_superimpose="fixed_chain" />
+        </ColabFold>
+    </MOVERS>
+
+    <FILTERS>
+        <NetCharge name="netcharge" confidence="0" />
+        <LongestContinuousApolarSegment name="apolar_segment"
+            residue_selector="full_pose"
+            confidence="0" />
+    </FILTERS>
+
+    <PROTOCOLS>
+        <Add mover="make_backbone" />
+        <Add mover="make_sequence" />
+        <Add mover="predict_structure" />
+        <Add filter="netcharge" />
+        <Add filter="apolar_segment" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
