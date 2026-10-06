@@ -63,16 +63,23 @@ def run_protocol(tmp_path_factory):
 		output_dir = tmp_path / "output"
 		config = stub_configuration(tmp_path / "rosettalink.config.yaml", tools)
 
-		argv = ["--protocol", protocol, "--output-dir", str(output_dir), "--config", str(config)]
+		# Protocol and inputs are named relative to the repository, but the
+		# run happens in a temporary directory: a work_dir written relative
+		# in a protocol lands beside the run rather than in the checkout.
+		argv = [
+			"--protocol", str(ROOT / protocol),
+			"--output-dir", str(output_dir),
+			"--config", str(config),
+		]
 		for path in inputs:
-			argv += ["--input", path]
+			argv += ["--input", str(ROOT / path)]
 		for name, value in (variables or {}).items():
 			argv += ["--var", f"{name}={value}"]
 
 		previous_dir = os.getcwd()
 		previous_fixture = os.environ.get("ROSETTALINK_STUB_FIXTURE")
 		os.environ["ROSETTALINK_STUB_FIXTURE"] = str(FIXTURES / fixture)
-		os.chdir(ROOT)
+		os.chdir(tmp_path)
 		pose_buffer.clear()
 		try:
 			main(argv)
