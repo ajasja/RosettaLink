@@ -1,4 +1,4 @@
-"""docs/two_helices_no_FOREACH.xml end to end, against stubbed programs.
+"""examples/generic_script_with_perPoseScoring.xml end to end, against stubs.
 
 The whole pipeline in the form that runs on a stock PyRosetta release, which
 is the one thing the other integration tests do not cover: every stage
@@ -11,13 +11,13 @@ reused and every design is a distinct structure.
 
 Run it with pytest, or directly:
 
-    PYTHONPATH=src python tests/integration/test_two_helices_pipeline.py
+    PYTHONPATH=src python tests/integration/test_per_pose_scoring_pipeline.py
 """
 
 import pytest
 
 INPUT = "examples/input_data/insulin_target.pdb"
-PROTOCOL = "docs/two_helices_no_FOREACH.xml"
+PROTOCOL = "examples/generic_script_with_perPoseScoring.xml"
 CONTIG = "[B1-150/0 90-120]"
 NUM_BACKBONES = 2
 NUM_SEQUENCES = 2

@@ -1,27 +1,33 @@
 <!--
-  docs/two_helices.xml without FOR_EACH_POSE, so it runs on a stock PyRosetta
-  release.
+  The full pipeline with filters and simple metrics applied to every design
+  rather than only the first. This is the one to copy when a protocol needs
+  per pose scoring.
 
       rosetta_link_scripts \
-          -parser:protocol docs/two_helices_no_FOREACH.xml \
+          -parser:protocol examples/generic_script_with_perPoseScoring.xml \
           -s examples/input_data/insulin_target.pdb \
-          -out:path output/two_helices \
+          -out:path output/per_pose \
           -var contig=[B1-150/0 90-120] \
           -var num_backbones=2 \
           -var num_sequences=3
 
-  FOR_EACH_POSE is an alias for MultiplePoseMover that adds a PROTOCOLS
-  subtag, so the same per pose scoring is had by wrapping a nested
-  ROSETTASCRIPTS in a MultiplePoseMover instead. The two forms produce the
-  same output; this one costs the duplication below.
+  Unlike the other examples this one takes -var, so the contig and the two
+  counts are set on the command line. num_backbones x num_sequences
+  structures come out: 2 x 3 = 6 above.
+
+  A filter in the outer PROTOCOLS list runs on the primary pose only, so its
+  column would be blank for every design but the first. Wrapping the scoring
+  stage in a MultiplePoseMover applies it to each one. The predictor metrics
+  need no wrapper, since ColabFold attaches those to every pose it produces.
 
   A nested ROSETTASCRIPTS has its own parse scope: the score function, the
   selector, the filters and the simple metric used inside it are declared
   again there and cannot be shared with the outer script. Change one and
   change the other.
 
-  Everything above the scoring stage is identical to two_helices.xml. See
-  that file for the labels, the batching and what each metric reports.
+  docs/two_helices.xml is the same protocol written with FOR_EACH_POSE,
+  which needs a PyRosetta build carrying RosettaCommons/rosetta pull
+  request 494.
 -->
 <ROSETTASCRIPTS>
 
