@@ -33,7 +33,7 @@ rosetta_link_scripts \
 | `binder_design.xml` | `insulin_target.pdb` | de novo binder against a fixed target chain |
 | `motif_scaffolding.xml` | `5TPN.pdb` | new scaffold around the RSV F site II helix |
 | `sequence_redesign.xml` | `redesign_target.pdb` | redesign one chain of an existing complex |
-| `generic_script_with_perPoseScoring.xml` | `insulin_target.pdb` | the full pipeline, scoring every design |
+| `general_example_with_per_pose_scoring.xml` | `insulin_target.pdb` | the full pipeline, scoring every design |
 | `colabfold_predict.xml` | any structure | refold one structure, no design |
 | `redesign_colabfold.xml` | any structure | redesign a sequence and refold it |
 
@@ -50,14 +50,14 @@ cached on each.
 
 ## The generic one
 
-`generic_script_with_perPoseScoring.xml` is the one to copy for new work. It
+`general_example_with_per_pose_scoring.xml` is the one to copy for new work. It
 is the only example that takes `-var`, so the contig and the per stage counts
 come from the command line, and it is the only one that scores every design
 rather than only the first:
 
 ```bash
 rosetta_link_scripts \
-    -parser:protocol examples/generic_script_with_perPoseScoring.xml \
+    -parser:protocol examples/general_example_with_per_pose_scoring.xml \
     -s examples/input_data/insulin_target.pdb \
     -out:path output/per_pose \
     -var contig="[B1-150/0 90-120]" \
@@ -117,7 +117,7 @@ Rosetta is reached.
 
 ## Writing your own
 
-Start from `generic_script_with_perPoseScoring.xml`.
+Start from `general_example_with_per_pose_scoring.xml`.
 
 Each mover stamps reslabels that later stages select on, behind whatever
 `prefix_name` it was given. RFdiffusion stamps `new_backbone`,

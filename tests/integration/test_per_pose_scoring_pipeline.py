@@ -1,4 +1,4 @@
-"""examples/generic_script_with_perPoseScoring.xml end to end, against stubs.
+"""examples/general_example_with_per_pose_scoring.xml end to end, against stubs.
 
 The whole pipeline in the form that runs on a stock PyRosetta release, which
 is the one thing the other integration tests do not cover: every stage
@@ -17,7 +17,7 @@ Run it with pytest, or directly:
 import pytest
 
 INPUT = "examples/input_data/insulin_target.pdb"
-PROTOCOL = "examples/generic_script_with_perPoseScoring.xml"
+PROTOCOL = "examples/general_example_with_per_pose_scoring.xml"
 CONTIG = "[B1-150/0 90-120]"
 NUM_BACKBONES = 2
 NUM_SEQUENCES = 2

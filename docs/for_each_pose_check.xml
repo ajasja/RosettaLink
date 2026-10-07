@@ -23,7 +23,7 @@
 
   This says nothing about whether poses are iterated correctly, only that the
   element parses. See docs/two_helices.xml for a protocol that uses it for
-  real, and examples/generic_script_with_perPoseScoring.xml for the MultiplePoseMover form
+  real, and examples/general_example_with_per_pose_scoring.xml for the MultiplePoseMover form
   that runs on a stock release.
 -->
 <ROSETTASCRIPTS>

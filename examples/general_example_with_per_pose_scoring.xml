@@ -4,7 +4,7 @@
   per pose scoring.
 
       rosetta_link_scripts \
-          -parser:protocol examples/generic_script_with_perPoseScoring.xml \
+          -parser:protocol examples/general_example_with_per_pose_scoring.xml \
           -s examples/input_data/insulin_target.pdb \
           -out:path output/per_pose \
           -var contig=[B1-150/0 90-120] \

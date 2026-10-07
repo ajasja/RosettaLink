@@ -23,7 +23,7 @@
   Filters are left out on purpose. A filter in the PROTOCOLS list runs on the
   primary pose only, so its column would be blank for every design but the
   first. To score each one, wrap the filters in a MultiplePoseMover with a
-  nested ROSETTASCRIPTS; examples/generic_script_with_perPoseScoring.xml shows that. The
+  nested ROSETTASCRIPTS; examples/general_example_with_per_pose_scoring.xml shows that. The
   predictor metrics above need no wrapper: ColabFold attaches them to every
   pose it produces.
 -->
