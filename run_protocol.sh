@@ -16,6 +16,14 @@
 # Every argument after the protocol is passed through to the runner. The
 # external programs are reached through rosettalink.config.yaml, so this
 # environment needs only PyRosetta.
+#
+# CONDA_ENV picks the environment, PROXY_SETUP a script to source before the
+# run. A compute node has no route to the internet until something exports
+# proxy settings, which a protocol needs whenever it asks ColabFold for an
+# msa_mode other than single_sequence:
+#
+#   PROXY_SETUP=/home/aljubetic/bin/setup_proxy_settings.sh \
+#       sbatch run_protocol.sh examples/binder_design.xml -s target.pdb
 
 set -euo pipefail
 
@@ -24,6 +32,11 @@ mkdir -p logs
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV:-/home/folivieri/miniforge3/envs/rosettalink}"
+
+if [ -n "${PROXY_SETUP:-}" ]; then
+    source "$PROXY_SETUP"
+    echo "proxy:    $PROXY_SETUP (https_proxy=${https_proxy:-unset})"
+fi
 
 PROTOCOL=$1
 shift
