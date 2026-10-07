@@ -1,0 +1,73 @@
+<!--
+  Motif scaffolding: RFdiffusion builds a new scaffold around a motif taken
+  from an input structure, LigandMPNN designs the scaffold while holding the
+  motif sequence, ColabFold refolds the result.
+
+      rosetta_link_scripts \
+          -parser:protocol examples/motif_scaffolding.xml \
+          -s examples/input_data/5TPN.pdb \
+          -out:path output/motif
+
+  The contig keeps chain A residues 163 to 181, the RSV F site II helix, and
+  builds 10 to 40 new residues on either side. 2 scaffolds x 2 sequences =
+  4 designs.
+
+  This is the protocol where rfd_motif is non empty, so scRMSD_motif is the
+  metric that matters: it says whether the motif kept its geometry in the
+  refolded design. In binder design that contig labels no motif and the
+  column stays blank.
+
+  fixed_reslabel holds the motif sequence, so LigandMPNN redesigns only the
+  scaffold around it.
+
+  Filters are left out on purpose. A filter in the PROTOCOLS list runs on the
+  primary pose only, so its column would be blank for every design but the
+  first. To score each one, wrap the filters in a MultiplePoseMover with a
+  nested ROSETTASCRIPTS; examples/generic_script_with_perPoseScoring.xml shows that. The
+  predictor metrics above need no wrapper: ColabFold attaches them to every
+  pose it produces.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <ResiduePDBInfoHasLabel name="rfd_motif" property="rfd_motif" />
+        <ResiduePDBInfoHasLabel name="rfd_new_backbone" property="rfd_new_backbone" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <RFdiffusion name="design_scaffold"
+            contig="[10-40/A163-181/10-40]"
+            num_designs="2"
+            batch="true"
+            prefix_name="rfd_"
+            extra_args="inference.input_pdb=input.pdb" />
+
+        <LigandMPNN name="design_sequence"
+            batch="true"
+            batch_size="2"
+            fixed_reslabel="rfd_motif"
+            prefix_name="mpnn_" />
+
+        <ColabFold name="predict_structure"
+            batch="true"
+            models="1,2"
+            msa_mode="single_sequence"
+            prefix_name="AF2_"
+            replace_pose="true">
+            <RMSD name="scRMSD_all" calculation="rfd_all" />
+            <RMSD name="scRMSD_motif" calculation="rfd_motif" />
+            <RMSD name="scRMSD_motif_on_scaffold"
+                  calculation="rfd_motif" alignment="rfd_new_backbone" />
+            <metric name="plddt_all" selector="rfd_all" />
+            <metric name="plddt_motif" selector="rfd_motif" />
+            <metric name="pAE_motif" selector="rfd_motif" />
+        </ColabFold>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_scaffold" />
+        <Add mover="design_sequence" />
+        <Add mover="predict_structure" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
