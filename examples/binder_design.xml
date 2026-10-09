@@ -36,7 +36,7 @@
             models="1,2"
             msa_mode="partial"
             existing_msa_selector="rfd_fixed"
-
+            existing_msa_file="input_data/existing_msa.m3a"
             prefix_name="AF2_"
             replace_pose="true">
             #all should be default selector if nothing is specified
@@ -44,9 +44,9 @@
             <RMSD name="scRMSD_binder" calculation_selector="rfd_new_backbone" />
             <RMSD name="scRMSD_binder_on_fixed" calculation_selector="rfd_new_backbone" alignment_selector="rfd_fixed" />
             #type, kind, metric, for specifying which metric we are subaveraging?
-            <metric name="plddt_all" metric="pLDDT" />
-            <metric name="plddt_binder" metric="pLDDT" selector="rfd_new_backbone" />
-            <metric name="pAE_binder" metric="pAE" selector="rfd_new_backbone" />
+            <metric name="plddt_all" base_metric="pLDDT" />
+            <metric name="plddt_binder" base_metric="pLDDT" selector="rfd_new_backbone" />
+            <metric name="pAE_binder" base_metric="pAE" selector="rfd_new_backbone" />
         </ColabFold>
 
         <ColabFold name="predict_only_binder"
@@ -58,7 +58,7 @@
             replace_pose="false">
             #Give warning if replace_pose and subset selector are given at the same time!
             <RMSD name="scRMSD"  />
-            <metric name="plddt" metric="pLDDT" />
+            <metric name="plddt" base_metric="pLDDT" />
         </ColabFold>
     </MOVERS>
 
