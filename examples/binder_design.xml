@@ -1,0 +1,72 @@
+<!--
+  Binder design: RFdiffusion builds a de novo binder against a fixed target
+  chain, LigandMPNN designs sequences for the binder only, ColabFold refolds
+  the complex.
+
+      rosetta_link_scripts \
+          -parser:protocol examples/binder_design.xml \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/binder
+
+  The contig keeps target chain B whole, then starts a new chain of 90 to 120
+  de novo residues. 2 backbones x 2 sequences = 4 designs.
+
+-->
+
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <TrueResidueSelector name="all" />
+        <ResiduePDBInfoHasLabel name="rfd_new_backbone" property="rfd_new_backbone" />
+        <ResiduePDBInfoHasLabel name="rfd_fixed" property="rfd_fixed" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <RFdiffusion name="design_backbone"
+            contig="[B1-150/0 90-120]"
+            num_designs="2"
+            prefix_name="rfd_"
+         />
+
+        <LigandMPNN name="design_sequence"
+            design_selector="rfd_new_backbone" 
+            prefix_name="mpnn_" />
+
+        <ColabFold name="predict_structure"
+            models="1,2"
+            msa_mode="partial"
+            existing_msa_selector="rfd_fixed"
+
+            prefix_name="AF2_"
+            replace_pose="true">
+            #all should be default selector if nothing is specified
+            <RMSD name="scRMSD"  />
+            <RMSD name="scRMSD_binder" calculation_selector="rfd_new_backbone" />
+            <RMSD name="scRMSD_binder_on_fixed" calculation_selector="rfd_new_backbone" alignment_selector="rfd_fixed" />
+            #type, kind, metric, for specifying which metric we are subaveraging?
+            <metric name="plddt_all" metric="pLDDT" />
+            <metric name="plddt_binder" metric="pLDDT" selector="rfd_new_backbone" />
+            <metric name="pAE_binder" metric="pAE" selector="rfd_new_backbone" />
+        </ColabFold>
+
+        <ColabFold name="predict_only_binder"
+            models="1,2"
+            msa_mode="single_sequence"
+            subset_selector="rfd_new_backbone"
+
+            prefix_name="AF2_only_binder_"
+            replace_pose="false">
+            #Give warning if replace_pose and subset selector are given at the same time!
+            <RMSD name="scRMSD"  />
+            <metric name="plddt" metric="pLDDT" />
+        </ColabFold>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+        <Add mover="design_sequence" />
+        <Add mover="predict_structure" />
+        <Add mover="predict_only_binder" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
