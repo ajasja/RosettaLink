@@ -217,3 +217,6 @@ __marimo__/
 /output/
 /pipeline_output/
 /pipeline_output_xml/
+
+# Working notes, kept on disk only and never committed.
+CLAUDE.md

@@ -1,17 +1,41 @@
 # @file movers/ColabFold.py
 # @brief Rosetta mover to run ColabFold
-
-"""
-ColabFold command strings should match those in do_cycling.
-    reference: https://github.com/ajasja/prosculpt/blob/5211fe061fe0cf03f79a9912fcb9c0f96fc11875/rfdiff_mpnn_af2_merged.py
-All scoring metrics should match those in rename_pdb_create_csv_colabfold.
-    reference: https://github.com/ajasja/prosculpt/blob/main/prosculpt.py
-"""
+#
+# run_command is the whole command prefix that reaches colabfold_batch, so the
+# mover does not care whether it is a container, a conda environment or a
+# binary on PATH:
+#
+#   run_command="colabfold_batch"
+#   run_command="singularity run --nv /path/to/colabfold.sif colabfold_batch"
+#   run_command="conda run -n colabfold colabfold_batch"
+#
+# When the attribute is not set the value comes from the ColabFold section of
+# rosettalink.config.yaml. The mover appends --model-order, --msa-mode,
+# --rank, the input fasta and the output directory.
+#
+# Each chain of the pose becomes its own entry of the fasta record, colon
+# separated, which is how colabfold_batch denotes a complex.
+#
+# batch="true" folds every pose published by the previous RosettaLink stage in
+# one colabfold_batch invocation instead of one per pose. See
+# rosettalink.utils.PoseBuffer.
+#
+# An RMSD subtag measures a self consistency RMSD: calculation names the
+# residues it is measured over and alignment the residues it is superimposed
+# on, both by reslabel.
+#
+# A metric subtag reports one confidence value averaged over the residues
+# carrying a reslabel. The name says which value, so plddt_motif averages
+# pLDDT and pAE_motif averages PAE, and is also the score key after
+# prefix_name.
+#
+# fasta folds the records of a file instead of the pose sequence: one pose per
+# record. Each pose carries its record id as the comment fasta_id, and since
+# these structures have no correspondence to the input pose, reslabels and
+# RMSD metrics are skipped.
 
 import json
 import os
-import shutil
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -20,44 +44,53 @@ from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabe
 from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
+from rosettalink.utils import get_run_command
 from rosettalink.utils import parse_fasta_records
+from rosettalink.utils import pose_buffer
+from rosettalink.utils import pose_chain_sequences
 from rosettalink.utils import resolve_rmsd_atoms
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
+from rosettalink.utils import work_dir
+import rosettalink.movers.BaseLinkMover as BaseLinkMover
 
 
-class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
+class ColabFold(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
     def __init__(
-        self, 
-        replace_pose="1", 
+        self,
+        replace_pose=True,
         fasta="",
-        models="1,2,3,4,5", 
-        msa_mode="single_sequence", 
-        rank="auto", 
+        batch=False,
+        models="1,2,3,4,5",
+        msa_mode="single_sequence",
+        rank="auto",
         prefix_name="AF2_",
-        cmd_header=None,
-        extra_args=None, 
-        work_dir=None, 
-        delete_dir="0"
-    ):        
+        run_command="",
+        cmd_header="",
+        extra_args=None,
+        work_dir=None,
+    ):
         pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
         self.rmsd_metrics = []
-        # Populated by apply() when folding a fasta: one pose per record
-        # beyond the first, exposed through get_additional_output().
+        self.confidence_metrics = []
+        # Populated by apply(): one pose per record beyond the first, exposed
+        # through get_additional_output(). Unused while batch is set, where
+        # the poses are served from the shared buffer instead.
         self.additional_poses_ = []
-        
+
         self.replace_pose_ = replace_pose
         self.fasta_ = fasta
+        self.batch_ = batch
         self.models_ = models
         self.msa_mode_ = msa_mode
         self.rank_ = rank
         self.prefix_name_ = prefix_name
+        self.run_command_ = run_command
         self.cmd_header_ = cmd_header
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
-        self.delete_dir_ = delete_dir
 
         self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, \
             self.tracer_debug, self.tracer_trace, *_ = setup_tracer("[ColabFold]")
@@ -65,182 +98,243 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
         self.tracer_info << (
             f"Initializing ColabFold:\n"
             f"\treplace_pose: {self.replace_pose_}\n"
+            f"\tbatch: {self.batch_}\n"
             f"\tmodels: {self.models_}\n"
             f"\tmsa_mode: {self.msa_mode_}\n"
             f"\trank: {self.rank_}\n"
             f"\tprefix_name: {self.prefix_name_}\n"
-            f"\tcmd_header: {self.cmd_header_}\n"
+            f"\trun_command: {self.run_command_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
-            f"\tdelete_dir: {self.delete_dir_}\n"
         ) and self.tracer_info.flush()
-        
+
     def clone(self):
         copy = ColabFold()
         copy.replace_pose_ = self.replace_pose_
         copy.fasta_ = self.fasta_
+        copy.batch_ = self.batch_
         copy.models_ = self.models_
         copy.msa_mode_ = self.msa_mode_
         copy.rank_ = self.rank_
         copy.prefix_name_ = self.prefix_name_
+        copy.run_command_ = self.run_command_
         copy.cmd_header_ = self.cmd_header_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
-        copy.delete_dir_ = self.delete_dir_
         copy.rmsd_metrics = self.rmsd_metrics.copy()
+        copy.confidence_metrics = self.confidence_metrics.copy()
         ColabFold.clones_.append(copy)
         return copy
-    
+
+    def resolve_run_command(self):
+        """Command prefix reaching colabfold_batch: run_command, else the
+        deprecated cmd_header, else the ColabFold section of the
+        configuration file."""
+        if not self.run_command_ and self.cmd_header_:
+            self.tracer_warning << (
+                "cmd_header is deprecated, use run_command instead\n"
+            ) and self.tracer_warning.flush()
+            return self.cmd_header_
+        return get_run_command(self.mover_name(), self.run_command_)
+
     def apply(self, pose):
-        # --- working directory --- #
-        # Fresh, self-cleaning temp directory every call (or a fresh
-        # subdirectory of a configured work_dir) - never stored back onto
-        # self.work_dir_, so this mover instance can safely be applied more
-        # than once (e.g. from a RosettaScripts MultiplePoseMover).
-        if self.work_dir_ is None or self.work_dir_ == "":
-            temp_dir = tempfile.TemporaryDirectory()
-            work_dir = Path(temp_dir.name)
-            self.tracer_info << f"No working directory specified, using temporary directory: {work_dir}\n" and self.tracer_info.flush()
-        else:
-            temp_dir = None
-            os.makedirs(self.work_dir_, exist_ok=True)
-            work_dir = Path(tempfile.mkdtemp(dir=self.work_dir_))
+        run_command = self.resolve_run_command()
 
         # --- INPUT FASTA --- #
-        # With fasta set the records come from that file, one per pose, with
-        # the chains of a record colon separated - which is also how
-        # colabfold_batch itself denotes a complex. Otherwise the pose
-        # sequence is written as the single record "input".
+        # One record per structure to fold, with its chains colon separated,
+        # which is how colabfold_batch denotes a complex.
+        #
+        # With fasta set the records come from that file and have no
+        # correspondence to any input pose. Otherwise they come from the
+        # poses: every pose of the batch, or just the one handed in.
         if self.fasta_:
             records = parse_fasta_records(self.fasta_)
+            input_poses = []
             self.tracer_info << (
                 f"Folding {len(records)} record(s) from {self.fasta_}\n"
             ) and self.tracer_info.flush()
         else:
-            records = [("input", [pose.sequence()])]
+            input_poses = (
+                pose_buffer.consume(pose, self.tracer_warning) if self.batch_ else [pose]
+            )
+            records = [
+                (f"design_{index}", pose_chain_sequences(input_pose))
+                for index, input_pose in enumerate(input_poses)
+            ]
+            self.tracer_info << (
+                f"Folding {len(records)} pose(s) in one invocation\n"
+                if self.batch_ else f"Folding 1 pose\n"
+            ) and self.tracer_info.flush()
 
-        fasta_path = work_dir / "input.fasta"
-        with open(fasta_path, "w") as f:
-            for record_id, chains in records:
-                f.write(f">{record_id}\n{':'.join(chains)}\n")
-        self.tracer_info << f"Writing {len(records)} record(s): {fasta_path}\n" and self.tracer_info.flush()
+        with work_dir(self.work_dir_, self.tracer_debug) as run_dir:
+            # We are already in tmp_dir (run_dir) at this point, so every path
+            # handed to colabfold_batch stays relative to it.
+            self.tracer_info << f"Current working directory: {os.getcwd()}\n" and self.tracer_info.flush()
 
-        # --- RUN COLABFOLD --- #
-        colabfold_cmd_str = (
-            f"{self.cmd_header_} "
-            f"--model-order {self.models_} "
-            f"--msa-mode {self.msa_mode_} "
-            f"--rank {self.rank_} "
-            f"{self.extra_args_ if self.extra_args_ else ''} "
-            f"{fasta_path} "
-            f"{work_dir}"
-        )
+            with open("input.fasta", "w") as f:
+                for record_id, chains in records:
+                    f.write(f">{record_id}\n{':'.join(chains)}\n")
+            self.tracer_info << f"Writing {len(records)} record(s) to input.fasta\n" and self.tracer_info.flush()
 
-        self.tracer_info << f"Running ColabFold: {colabfold_cmd_str}\n" and self.tracer_info.flush()
-        run_and_log(colabfold_cmd_str, self.tracer_info, self.tracer_error)
+            # --- RUN COLABFOLD --- #
+            colabfold_cmd_str = (
+                f"{run_command} "
+                f"--model-order {self.models_} "
+                f"--msa-mode {self.msa_mode_} "
+                f"--rank {self.rank_} "
+                f"{self.extra_args_ if self.extra_args_ else ''} "
+                f"input.fasta "
+                f"."
+            )
 
-        # --- ONE POSE PER FASTA RECORD --- #
-        # Structures folded from a fasta have no correspondence to the input
-        # pose, so its labels are not carried over and no RMSD is computed.
-        if self.fasta_:
+            run_and_log(colabfold_cmd_str, self.tracer_info, self.tracer_error)
+
+            # --- ONE POSE PER RECORD --- #
+            output_dir = Path(".")
+            predicted_poses = []
+            for index, (record_id, _) in enumerate(records):
+                input_pose = input_poses[index] if input_poses else None
+                predicted_poses.append(
+                    self._load_and_label_prediction(output_dir, record_id, input_pose)
+                )
+
+            # Primary output: the pose the caller already holds a reference to
+            # gets the first prediction.
+            pose.assign(predicted_poses[0])
+
+            if self.batch_:
+                pose_buffer.publish(self, predicted_poses)
+                self.additional_poses_ = []
+            else:
+                self.additional_poses_ = list(predicted_poses[1:])
+
+    def _best_prediction_pdb(self, run_dir, record_id):
+        """The rank_001 pdb colabfold_batch wrote for one record. The trailing
+        underscore keeps design_1 from matching the output of design_10."""
+        matches = sorted(run_dir.glob(f"{record_id}_*rank_001*.pdb"))
+        if not matches:
+            matches = sorted(run_dir.glob(f"{record_id}_*.pdb"))
+        if not matches:
+            self.tracer_error << (
+                f"No ColabFold output pdb found for record {record_id} in {run_dir}\n"
+            ) and self.tracer_error.flush()
+            raise RuntimeError(
+                f"No ColabFold output pdb found for record {record_id} in {run_dir}"
+            )
+        return matches[0]
+
+    def _load_and_label_prediction(self, run_dir, record_id, input_pose):
+        """Load the best prediction of one record, carry over the reslabels of
+        its input pose, attach the confidence scores and compute any
+        configured RMSD metrics.
+
+        input_pose is None for a structure folded from a fasta record. Those
+        have no correspondence to any pose, so no labels are carried and no
+        RMSD is computed; the id is recorded as the pose comment fasta_id."""
+        best_pdb = self._best_prediction_pdb(run_dir, record_id)
+        self.tracer_info << f"{record_id}: {best_pdb}\n" and self.tracer_info.flush()
+
+        if input_pose is None:
+            pose = pyrosetta.pose_from_file(str(best_pdb))
+            pyrosetta.rosetta.core.pose.add_comment(pose, "fasta_id", record_id)
+            self._attach_scores(pose, run_dir, record_id)
             if self.rmsd_metrics:
                 self.tracer_warning << (
                     "Skipping RMSD metrics: structures folded from a fasta have no "
                     "correspondence to the input pose\n"
                 ) and self.tracer_warning.flush()
+            return pose
 
-            record_poses = []
-            for record_id, _ in records:
-                matches = sorted(work_dir.glob(f"{record_id}_*rank_001*.pdb"))
-                if not matches:
-                    matches = sorted(work_dir.glob(f"{record_id}_*.pdb"))
-                if not matches:
-                    self.tracer_error << (
-                        f"No ColabFold output pdb found for record {record_id} in {work_dir}\n"
-                    ) and self.tracer_error.flush()
-                    raise RuntimeError(
-                        f"No ColabFold output pdb found for record {record_id} in {work_dir}"
-                    )
-                record_pose = pyrosetta.pose_from_file(str(matches[0]))
-                pyrosetta.rosetta.core.pose.add_comment(record_pose, "fasta_id", record_id)
-                self._attach_scores(record_pose, work_dir, record_id)
-                self.tracer_info << (
-                    f"{record_id}: {matches[0]}\n"
-                ) and self.tracer_info.flush()
-                record_poses.append(record_pose)
+        if self.replace_pose_:
+            pose = pyrosetta.pose_from_file(str(best_pdb))
+            pdb_info_old = input_pose.pdb_info()
+            pdb_info_new = pose.pdb_info()
+            if pdb_info_old is not None and pdb_info_new is not None:
+                for resnum in range(1, min(input_pose.total_residue(), pose.total_residue()) + 1):
+                    for reslabel in pdb_info_old.get_reslabels(resnum):
+                        pdb_info_new.add_reslabel(resnum, reslabel)
+        else:
+            pose = input_pose.clone()
 
-            pose.assign(record_poses[0])
-            self.additional_poses_ = list(record_poses[1:])
-            self._cleanup(temp_dir, work_dir)
+        self._attach_scores(pose, run_dir, record_id)
+        self._attach_rmsd_metrics(pose, input_pose)
+        return pose
+
+    def _attach_scores(self, pose, run_dir, record_id):
+        """Attaches the mean pLDDT and PAE of one record, read from the
+        rank_001 scores json ColabFold writes for it."""
+        json_files = sorted(run_dir.glob(f"{record_id}_*scores*rank_001*.json"))
+        if not json_files:
+            json_files = sorted(run_dir.glob(f"{record_id}_*scores*.json"))
+        if not json_files:
+            self.tracer_warning << (
+                f"No scores json found for record {record_id} in {run_dir}\n"
+            ) and self.tracer_warning.flush()
             return
 
-        # --- OUTPUT PDB --- #
-        pdb_files = sorted(work_dir.glob("*.pdb"))
-        if not pdb_files:
-            self.tracer_error << f"No PDB files found in output directory: {work_dir}\n" and self.tracer_error.flush()
-            raise RuntimeError(f"No PDB files found in output directory: {work_dir}")
-        self.tracer_info << f"PDB files found: {[str(pdb) for pdb in pdb_files]}\n" and self.tracer_info.flush()
+        with open(json_files[0], "r") as f:
+            scores = json.load(f)
 
-        # --- BEST PREDICTION --- #
-        best_pdb = next((pdb for pdb in pdb_files if "rank_001" in pdb.name), pdb_files[0])
-        self.tracer_info << f"Best ColabFold prediction: {best_pdb}\n" and self.tracer_info.flush()
+        for key in ("plddt", "pae"):
+            if key in scores:
+                value = float(np.mean(scores[key]))
+                score_name = f"{self.prefix_name_}{key}"
+                setPoseExtraScore(pose, score_name, value)
+                self.tracer_info << f"\t{record_id} {score_name}: {value}\n" and self.tracer_info.flush()
 
-        # --- REPLACE POSE --- #
-        input_pose = pose.clone()
-        if self.replace_pose_:
-            best_pose = pyrosetta.pose_from_file(str(best_pdb))
-            pose.assign(best_pose)
-            
-            reslabels_all = {}
-            pdb_info_old = input_pose.pdb_info()
-            for resnum in range(1, input_pose.total_residue() + 1):
-                reslabels = pdb_info_old.get_reslabels(resnum)
-                if reslabels:
-                    reslabels_all[resnum] = reslabels
+        self._attach_confidence_metrics(pose, record_id, scores)
 
-            pdb_info_new = pose.pdb_info()
-            for resnum, reslabels in reslabels_all.items():
-                for reslabel in reslabels:
-                    pdb_info_new.add_reslabel(resnum, reslabel)
+    def _attach_confidence_metrics(self, pose, record_id, scores):
+        """Computes every configured metric subtag: one confidence value
+        averaged over the residues carrying a reslabel.
 
-            self.tracer_info << f"Replaced pose with best ColabFold prediction: {best_pdb}\n" and self.tracer_info.flush()
+        A metric whose reslabel matches nothing is skipped and warned about,
+        rather than reported as the mean of an empty selection."""
+        for metric in self.confidence_metrics:
+            quantity = metric["quantity"]
+            if quantity not in scores:
+                self.tracer_warning << (
+                    f"Skipping metric {metric['name']}: the scores json of {record_id} "
+                    f"has no {quantity}\n"
+                ) and self.tracer_warning.flush()
+                continue
 
-        # --- STORE SCORES --- #
-        json_files = sorted(work_dir.glob("*scores*.json"))
-        if not json_files:
-            self.tracer_warning << f"No JSON files with scores found in output directory: {work_dir}\n" and self.tracer_warning.flush()
-        else:
-            best_json = next((j for j in json_files if "rank_001" in j.name), json_files[0])
-            self.tracer_info << f"Extracting scores from {best_json}\n" and self.tracer_info.flush()
+            resnums = self._labelled_resnums(pose, metric["reslabel"], len(scores[quantity]))
+            if not resnums:
+                self.tracer_warning << (
+                    f"Skipping metric {metric['name']}: no residue of {record_id} carries "
+                    f"the label {metric['reslabel']}\n"
+                ) and self.tracer_warning.flush()
+                continue
 
-            with open(best_json, "r") as f:
-                scores = json.load(f)
+            if quantity == "pae":
+                # pae is a residue by residue matrix, so restricting it to a
+                # label means the block where both residues carry the label.
+                values = [scores["pae"][i - 1][j - 1] for i in resnums for j in resnums]
+            else:
+                values = [scores[quantity][resnum - 1] for resnum in resnums]
 
-                if "plddt" in scores:
-                    # plddt_all
-                    plddt = float(np.mean(scores["plddt"]))
-                    setPoseExtraScore(pose, f"{self.prefix_name_}plddt", plddt)
-                    self.tracer_info << f"\t{self.prefix_name_}plddt: {plddt}\n" and self.tracer_info.flush()
+            value = float(np.mean(values))
+            score_name = f"{self.prefix_name_}{metric['name']}"
+            setPoseExtraScore(pose, score_name, value)
+            self.tracer_info << f"\t{record_id} {score_name}: {value}\n" and self.tracer_info.flush()
 
-                    # plddt_sculpted
-                    pdb_info = pose.pdb_info()
-                    sculpted_residues = set(
-                        resnum - 1
-                        for resnum in range(1, pose.total_residue() + 1)
-                        if pdb_info.res_haslabel(resnum, "sculpted")
-                    )
-                    plddt_per_residue = [scores["plddt"][i] for i in range(len(scores["plddt"])) if i in sculpted_residues]
-                    plddt_sculpted = float(np.mean(plddt_per_residue))
-                    setPoseExtraScore(pose, f"{self.prefix_name_}plddt_sculpted", plddt_sculpted)
-                    self.tracer_info << f"\t{self.prefix_name_}plddt_sculpted: {plddt_sculpted}\n" and self.tracer_info.flush()  
+    @staticmethod
+    def _labelled_resnums(pose, reslabel, limit):
+        """Residues carrying a reslabel, in pose numbering, up to the number
+        of residues the confidence values cover."""
+        pdb_info = pose.pdb_info()
+        if pdb_info is None:
+            return []
+        return [
+            resnum
+            for resnum in range(1, min(pose.total_residue(), limit) + 1)
+            if pdb_info.res_haslabel(resnum, reslabel)
+        ]
 
-                if "pae" in scores:
-                    # pae_all
-                    pae = float(np.mean(scores["pae"]))
-                    setPoseExtraScore(pose, f"{self.prefix_name_}pae", pae)
-                    self.tracer_info << f"\t{self.prefix_name_}pae: {pae}\n" and self.tracer_info.flush()
-        
-        # --- RMSD METRICS --- #
+    def _attach_rmsd_metrics(self, pose, input_pose):
+        """Computes every configured <RMSD> against the pose this prediction
+        was folded from."""
         for rmsd in self.rmsd_metrics:
             # reslabel_input selects on the pose the mover was handed,
             # reslabel_prediction on the prediction.
@@ -294,46 +388,12 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
             setPoseExtraScore(pose, rmsd_name, rmsd_value)
             self.tracer_info << f"\t{rmsd_name}: {rmsd_value}\n" and self.tracer_info.flush()
 
-        # --- CLEANUP --- #
-        self._cleanup(temp_dir, work_dir)
-
-    def _attach_scores(self, pose, work_dir, record_id):
-        """Attaches the mean pLDDT and PAE of one fasta record, read from the
-        rank_001 scores json ColabFold writes for it."""
-        json_files = sorted(work_dir.glob(f"{record_id}_*scores*rank_001*.json"))
-        if not json_files:
-            json_files = sorted(work_dir.glob(f"{record_id}_*scores*.json"))
-        if not json_files:
-            self.tracer_warning << (
-                f"No scores json found for record {record_id} in {work_dir}\n"
-            ) and self.tracer_warning.flush()
-            return
-
-        with open(json_files[0], "r") as f:
-            scores = json.load(f)
-        for key in ("plddt", "pae"):
-            if key in scores:
-                value = float(np.mean(scores[key]))
-                score_name = f"{self.prefix_name_}{key}"
-                setPoseExtraScore(pose, score_name, value)
-                self.tracer_info << f"\t{record_id} {score_name}: {value}\n" and self.tracer_info.flush()
-
-    def _cleanup(self, temp_dir, work_dir):
-        """Removes this call working directory, when it is a temporary one or
-        delete_dir asks for it."""
-        if temp_dir:
-            temp_dir.cleanup()
-            self.tracer_info << f"Cleaned up temporary directory: {work_dir}\n" and self.tracer_info.flush()
-        elif self.delete_dir_:
-            try:
-                shutil.rmtree(work_dir)
-                self.tracer_info << f"Deleted working directory: {work_dir}\n" and self.tracer_info.flush()
-            except Exception:
-                self.tracer_error << f"Failed to delete working directory: {work_dir}\n" and self.tracer_error.flush()
-
     def get_additional_output(self):
         # Pull-one-at-a-time: pops and returns one additional pose per call,
-        # None once exhausted. Only ever populated when folding a fasta.
+        # None once exhausted. While batching, the poses come from the shared
+        # buffer and are served only until a downstream mover takes them.
+        if self.batch_:
+            return pose_buffer.pop_for(self)
         if not self.additional_poses_:
             return None
         return self.additional_poses_.pop(0)
@@ -344,55 +404,112 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
     def parse_my_tag(self, tag, data):
         self.tracer_debug << f"Parsing my tag @ ColabFold...\n\tself: {self}\n\ttag: {tag}\n\tdata: {data}\n" and self.tracer_debug.flush()
 
-        # required attributes
-        self.cmd_header_ = tag.get_option_string("cmd_header")
-
-        # optional attributes
+        self.run_command_ = tag.get_option_string("run_command") if tag.hasOption("run_command") else ""
+        self.cmd_header_ = tag.get_option_string("cmd_header") if tag.hasOption("cmd_header") else ""
         self.fasta_ = tag.get_option_string("fasta") if tag.hasOption("fasta") else ""
-        self.replace_pose_ = tag.get_option_bool("replace_pose") if tag.hasOption("replace_pose") else "1"
+        self.batch_ = tag.get_option_bool("batch") if tag.hasOption("batch") else False
+        self.replace_pose_ = tag.get_option_bool("replace_pose") if tag.hasOption("replace_pose") else True
         self.models_ = tag.get_option_string("models") if tag.hasOption("models") else "1,2,3,4,5"
         self.msa_mode_ = tag.get_option_string("msa_mode") if tag.hasOption("msa_mode") else "single_sequence"
         self.rank_ = tag.get_option_string("rank") if tag.hasOption("rank") else "auto"
-        self.prefix_name_ = tag.get_option_string("prefix_name") if tag.hasOption("prefix_name") else ""
+        self.prefix_name_ = tag.get_option_string("prefix_name") if tag.hasOption("prefix_name") else "AF2_"
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
-        self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
-        self.delete_dir_ = tag.get_option_bool("delete_dir") if tag.hasOption("delete_dir") else "0"
+        self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else None
 
         self.tracer_info << (
             f"Parsing options:\n"
             f"\treplace_pose: {self.replace_pose_}\n"
+            f"\tbatch: {self.batch_}\n"
             f"\tmodels: {self.models_}\n"
             f"\tmsa_mode: {self.msa_mode_}\n"
             f"\trank: {self.rank_}\n"
             f"\tprefix_name: {self.prefix_name_}\n"
-            f"\tcmd_header: {self.cmd_header_}\n"
+            f"\trun_command: {self.run_command_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
-            f"\tdelete_dir: {self.delete_dir_}\n"
         ) and self.tracer_info.flush()
 
-        # RMSD metrics
+        # RMSD and confidence metrics
         for child in tag.getTags():
             if child.getName() == "RMSD":
-                self.rmsd_metrics.append({
-                    "name": child.get_option_string("name"),
-                    "reslabel_input": child.get_option_string("reslabel_input"),
-                    "reslabel_prediction": child.get_option_string("reslabel_prediction"),
-                    "reslabel_superimpose": (
-                        child.get_option_string("reslabel_superimpose")
-                        if child.hasOption("reslabel_superimpose") else ""
-                    ),
-                    "atoms": (
-                        child.get_option_string("atoms")
-                        if child.hasOption("atoms") else "ca"
-                    ),
-                })
+                self.rmsd_metrics.append(self._parse_rmsd_tag(child))
+            elif child.getName() == "metric":
+                self.confidence_metrics.append(self._parse_metric_tag(child))
         # Reject an unknown atoms= value here rather than after the
         # prediction has already run.
         for rmsd in self.rmsd_metrics:
             resolve_rmsd_atoms(rmsd["atoms"])
         rmsd_names = [f"{rmsd['name']} (atoms={rmsd['atoms']})" for rmsd in self.rmsd_metrics]
         self.tracer_info << f"RMSD metrics found: {rmsd_names}\n" and self.tracer_info.flush()
+        metric_names = [
+            f"{metric['name']} ({metric['quantity']} over {metric['reslabel']})"
+            for metric in self.confidence_metrics
+        ]
+        self.tracer_info << f"Confidence metrics found: {metric_names}\n" and self.tracer_info.flush()
+
+    def _parse_rmsd_tag(self, child):
+        """One RMSD subtag.
+
+        calculation names the residues the RMSD is measured over and
+        alignment the residues it is superimposed on, both by reslabel.
+        alignment defaults to the measured residues."""
+        if child.hasOption("calculation"):
+            measured = child.get_option_string("calculation")
+            superimpose = (
+                child.get_option_string("alignment") if child.hasOption("alignment") else ""
+            )
+            reslabel_input = reslabel_prediction = measured
+        else:
+            self.tracer_warning << (
+                "reslabel_input and reslabel_prediction are deprecated, "
+                "use calculation and alignment instead\n"
+            ) and self.tracer_warning.flush()
+            reslabel_input = child.get_option_string("reslabel_input")
+            reslabel_prediction = (
+                child.get_option_string("reslabel_prediction")
+                if child.hasOption("reslabel_prediction") else reslabel_input
+            )
+            superimpose = (
+                child.get_option_string("reslabel_superimpose")
+                if child.hasOption("reslabel_superimpose") else ""
+            )
+
+        if not reslabel_input:
+            raise RuntimeError(
+                f"RMSD {child.get_option_string('name')} needs calculation set to a reslabel"
+            )
+
+        return {
+            "name": child.get_option_string("name"),
+            "reslabel_input": reslabel_input,
+            "reslabel_prediction": reslabel_prediction,
+            "reslabel_superimpose": superimpose,
+            "atoms": child.get_option_string("atoms") if child.hasOption("atoms") else "ca",
+        }
+
+    @staticmethod
+    def _parse_metric_tag(child):
+        """One metric subtag: a confidence value averaged over the residues
+        carrying a reslabel, reported under name.
+
+        Which value is taken from the name, so plddt_motif averages pLDDT and
+        pAE_motif averages PAE."""
+        name = child.get_option_string("name")
+        lowered = name.lower()
+        if lowered.startswith("plddt"):
+            quantity = "plddt"
+        elif lowered.startswith("pae"):
+            quantity = "pae"
+        else:
+            raise RuntimeError(
+                f"metric {name} must start with plddt or pAE, which is what names the "
+                f"confidence value it reports"
+            )
+        return {
+            "name": name,
+            "quantity": quantity,
+            "reslabel": child.get_option_string("selector"),
+        }
 
     @staticmethod
     def mover_name():
@@ -402,21 +519,29 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
     def provide_xml_schema(cls, xsd):
         from pyrosetta.rosetta.utility.tag import XMLSchemaAttribute, XMLSchemaType
         from pyrosetta.rosetta.utility.tag import xs_string, xs_boolean
-        
+
         attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
 
-        # required attributes
-        attrlist.append(XMLSchemaAttribute.required_attribute(
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
+            "run_command",
+            XMLSchemaType(xs_string),
+            "Command prefix reaching colabfold_batch, whether it is a binary on PATH (colabfold_batch), a container (singularity run --nv /path/to/colabfold.sif colabfold_batch) or another environment (conda run -n ENVNAME colabfold_batch). Taken from the ColabFold section of rosettalink.config.yaml when not set here",
+            ""))
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "cmd_header",
             XMLSchemaType(xs_string),
-            "Start to the command string, dependent on user device"))
-
-        # optional attributes
+            "Deprecated name for run_command, kept so existing protocols keep working",
+            ""))
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
+            "batch",
+            XMLSchemaType(xs_boolean),
+            "Whether to fold every pose published by the previous RosettaLink mover in one colabfold_batch invocation, instead of one invocation per pose. Leave false when the mover sits inside a FOR_EACH_POSE or MultiplePoseMover, which hands it one pose at a time",
+            "false"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "replace_pose",
             XMLSchemaType(xs_boolean),
             "Whether current pose is replaced with the rank_001 prediction",
-            "1"))
+            "true"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "fasta",
             XMLSchemaType(xs_string),
@@ -452,12 +577,7 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
             XMLSchemaType(xs_string),
             "Directory where the ColabFold output will be stored. If not provided, a temporary directory will be used. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
             ""))
-        attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "delete_dir",
-            XMLSchemaType(xs_boolean),
-            "Whether to delete the working directory after the run",
-            "0"))
-        
+
         # RMSD attributes
         rmsd_attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
         rmsd_attrlist.append(
@@ -468,24 +588,42 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
             )
         )
         rmsd_attrlist.append(
-            XMLSchemaAttribute.required_attribute(
-                "reslabel_input",
+            XMLSchemaAttribute.attribute_w_default(
+                "calculation",
                 XMLSchemaType(xs_string),
-                "Residue label in input over which RMSD is calculated"
+                "Reslabel naming the residues the RMSD is measured over, on both the input pose and the prediction",
+                ""
             )
         )
         rmsd_attrlist.append(
-            XMLSchemaAttribute.required_attribute(
+            XMLSchemaAttribute.attribute_w_default(
+                "alignment",
+                XMLSchemaType(xs_string),
+                "Reslabel naming the residues the structures are superimposed on, when that should differ from the residues the RMSD is measured over. For example superimpose on a fixed target chain and measure a designed binder, which reports how well the binder is placed and not only how well it folds. Defaults to the measured residues.",
+                ""
+            )
+        )
+        rmsd_attrlist.append(
+            XMLSchemaAttribute.attribute_w_default(
+                "reslabel_input",
+                XMLSchemaType(xs_string),
+                "Deprecated, use calculation. Residue label in input over which RMSD is calculated",
+                ""
+            )
+        )
+        rmsd_attrlist.append(
+            XMLSchemaAttribute.attribute_w_default(
                 "reslabel_prediction",
                 XMLSchemaType(xs_string),
-                "Residue label in prediction over which RMSD is calculated"
+                "Deprecated, use calculation. Residue label in prediction over which RMSD is calculated",
+                ""
             )
         )
         rmsd_attrlist.append(
             XMLSchemaAttribute.attribute_w_default(
                 "reslabel_superimpose",
                 XMLSchemaType(xs_string),
-                "Residue label to superimpose over, when it should differ from the residues the RMSD is measured over. For example superimpose on a fixed target chain and measure a designed binder, which reports how well the binder is placed and not only how well it folds. Defaults to the measured residues.",
+                "Deprecated, use alignment. Residue label to superimpose over, when it should differ from the residues the RMSD is measured over.",
                 ""
             )
         )
@@ -502,8 +640,26 @@ class ColabFold(pyrosetta.rosetta.protocols.moves.Mover):
                         Runs ColabFold to predict protein structures.
                         '''
 
+        # metric attributes
+        metric_attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
+        metric_attrlist.append(
+            XMLSchemaAttribute.required_attribute(
+                "name",
+                XMLSchemaType(xs_string),
+                "Score key this metric is reported under, after prefix_name. It also names the confidence value reported: a name starting with plddt reports pLDDT and one starting with pAE reports PAE"
+            )
+        )
+        metric_attrlist.append(
+            XMLSchemaAttribute.required_attribute(
+                "selector",
+                XMLSchemaType(xs_string),
+                "Reslabel naming the residues the confidence value is averaged over"
+            )
+        )
+
         subelements = pyrosetta.rosetta.utility.tag.XMLSchemaSimpleSubelementList()
         subelements.add_simple_subelement("RMSD", rmsd_attrlist, "RMSD applied over specified residue label")
+        subelements.add_simple_subelement("metric", metric_attrlist, "Confidence value averaged over the residues carrying a reslabel")
         pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes_and_repeatable_subelements(
             xsd, cls.mover_name(), description, attrlist, subelements)
 

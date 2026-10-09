@@ -1,13 +1,14 @@
 import os
 import re
 import shutil
-
-import pyrosetta
-from pyrosetta.rosetta.basic import Tracer, TracerPriority
-
 import tempfile
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
+
+# pyrosetta is imported inside the functions that need it, so this module can
+# be imported - and its configuration, pose-buffer, work_dir and fasta helpers
+# tested - in an environment without PyRosetta.
+
 
 def run_and_log(command, tracer_info, tracer_error):
     """Runs a command using os.system and also logs the command before running using print"""
@@ -23,6 +24,8 @@ def run_and_log(command, tracer_info, tracer_error):
         raise Exception(f" Command exited with exit code {exitCode}\n\n{dodatek}")
 
 def setup_tracer(mover_name):
+    from pyrosetta.rosetta.basic import Tracer, TracerPriority
+
     new_tracer_fatal = Tracer(mover_name, TracerPriority.t_fatal)
     new_tracer_error = Tracer(mover_name, TracerPriority.t_error)
     new_tracer_warning = Tracer(mover_name, TracerPriority.t_warning)
@@ -31,6 +34,181 @@ def setup_tracer(mover_name):
     new_tracer_trace = Tracer(mover_name, TracerPriority.t_trace)
     return new_tracer_fatal, new_tracer_error, new_tracer_warning, new_tracer_info, new_tracer_debug, new_tracer_trace
 
+
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
+
+# Name of the configuration file looked for when no path is given.
+CONFIG_FILENAME = "rosettalink.config.yaml"
+
+# Contents of the loaded configuration file. One key per mover name, each
+# holding that mover's settings:
+#
+#   RFdiffusion:
+#     run_command: singularity run --nv /path/to/rfdiffusion.sif
+#   ColabFold:
+#     run_command: colabfold_batch
+#
+# Populated by load_configuration(), which rosettalink.init() calls. Mutated
+# in place, so `from rosettalink.utils import configuration` stays valid.
+configuration = {}
+
+
+def config_search_paths(config=None):
+    """Paths load_configuration() looks at, in order. With config given that
+    is the only path; otherwise the current directory is tried before
+    ~/.rosettalink/."""
+    if config:
+        return [Path(config)]
+    return [
+        Path.cwd() / CONFIG_FILENAME,
+        Path.home() / ".rosettalink" / CONFIG_FILENAME,
+    ]
+
+
+def load_configuration(config=None):
+    """Loads a configuration file into `configuration` and returns the path it
+    came from, or None when no file was found.
+
+    Raises FileNotFoundError when config names a file that does not exist, so
+    a mistyped path is reported rather than silently ignored."""
+    import yaml
+
+    paths = config_search_paths(config)
+    for path in paths:
+        if not path.is_file():
+            continue
+        with open(path) as handle:
+            loaded = yaml.safe_load(handle) or {}
+        if not isinstance(loaded, dict):
+            raise RuntimeError(
+                f"{path} must hold a mapping of mover name to settings, got {type(loaded).__name__}"
+            )
+        configuration.clear()
+        configuration.update(loaded)
+        return str(path)
+
+    if config:
+        raise FileNotFoundError(f"Configuration file not found: {config}")
+    configuration.clear()
+    return None
+
+
+def mover_configuration(mover_name):
+    """Settings of one mover from the loaded configuration, as a dict. Empty
+    when the file has no section for it."""
+    section = configuration.get(mover_name)
+    return section if isinstance(section, dict) else {}
+
+
+def get_run_command(mover_name, run_command=""):
+    """The command prefix that reaches the external program of mover_name.
+
+    The value given on the tag wins; otherwise it comes from the run_command
+    key of that mover's section in the configuration file. Raises naming both
+    when neither is set."""
+    if run_command:
+        return run_command
+
+    from_config = mover_configuration(mover_name).get("run_command", "")
+    if from_config:
+        return from_config
+
+    searched = ", ".join(str(path) for path in config_search_paths())
+    raise RuntimeError(
+        f"No run_command for {mover_name}. Either set run_command on the tag:\n"
+        f'    <{mover_name} name="..." run_command="..." />\n'
+        f"or add a section to {CONFIG_FILENAME}:\n"
+        f"    {mover_name}:\n"
+        f"      run_command: ...\n"
+        f"Configuration searched: {searched}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Pose buffer
+# --------------------------------------------------------------------------- #
+
+
+class PoseBuffer:
+    """Poses handed from one RosettaLink mover to the next inside a single
+    PROTOCOLS list, so a stage can run its external program once over every
+    pose instead of once per pose.
+
+    A mover with batch="true" calls consume() to get its full input set and
+    publish() to hand its results on. `owner` is the mover instance that
+    published the current contents; a mover serves get_additional_output()
+    from the buffer only while it is still the owner, so once a downstream
+    mover consumes the poses the upstream mover reports nothing more.
+
+    The buffer is global to the process and holds one chain's worth of poses,
+    so clear() it before applying a protocol to a new input structure.
+    """
+
+    def __init__(self):
+        self.owner = None
+        self.poses = []
+        self.cursor = 0
+
+    def clear(self):
+        self.owner = None
+        self.poses = []
+        self.cursor = 0
+
+    def publish(self, owner, poses):
+        """Stores every pose owner produced. poses[0] is the one already
+        assigned into the pose apply() was handed, so it is not served again
+        through pop_for()."""
+        self.owner = owner
+        self.poses = list(poses)
+        self.cursor = 1
+
+    def consume(self, pose, tracer_warning=None):
+        """Every pose the previous stage published, or [pose] when there is
+        none. Empties the buffer, so the mover that published them stops
+        offering them through get_additional_output().
+
+        Falls back to [pose] when the buffered poses do not match the pose
+        handed in, which means the buffer is left over from an earlier
+        protocol rather than coming from the mover just before this one."""
+        if not self.poses:
+            return [pose]
+
+        first = self.poses[0]
+        if first.total_residue() != pose.total_residue() or first.sequence() != pose.sequence():
+            if tracer_warning is not None:
+                tracer_warning << (
+                    f"Ignoring {len(self.poses)} buffered pose(s): the first does not match "
+                    f"the pose handed in. Call rosettalink.utils.pose_buffer.clear() between "
+                    f"input structures.\n"
+                ) and tracer_warning.flush()
+            self.clear()
+            return [pose]
+
+        poses = self.poses
+        self.clear()
+        return poses
+
+    def pop_for(self, owner):
+        """One pose beyond the primary, or None once they are exhausted or
+        another mover has taken ownership."""
+        if self.owner is not owner or self.cursor >= len(self.poses):
+            return None
+        pose = self.poses[self.cursor]
+        self.cursor += 1
+        return pose
+
+    def drain(self):
+        """Every pose not yet served, whoever owns them, and empties the
+        buffer. For a driver collecting the results of a finished protocol."""
+        remaining = self.poses[self.cursor:]
+        self.clear()
+        return remaining
+
+
+# Process-wide buffer the batching movers hand poses through.
+pose_buffer = PoseBuffer()
 
 
 def parse_fasta_records(fasta_path, chain_separator=":"):
@@ -82,6 +260,13 @@ def parse_fasta_records(fasta_path, chain_separator=":"):
     return records
 
 
+def pose_chain_sequences(pose):
+    """Sequences of the pose, one per chain, in pose order. Used to build the
+    input of a structure predictor, so that a complex is folded as a complex
+    rather than as one fused polypeptide."""
+    return [chain.sequence() for chain in pose.split_by_chain()]
+
+
 def drain_additional_output(mover):
     """Collects every pose a one-to-many mover produced beyond the one
     already sitting in the pose apply() was given.
@@ -118,6 +303,8 @@ def resolve_rmsd_atoms(atoms):
     Accepts the short names in RMSD_ATOM_SETS ("ca", "heavy", ...) or a
     core::scoring::rmsd_atoms name ("rmsd_protein_bb_ca", ...) directly. The
     chosen atom set governs the superposition as well as the measurement."""
+    import pyrosetta
+
     rmsd_atoms = pyrosetta.rosetta.core.scoring.rmsd_atoms
     requested = atoms.strip()
     enum_name = RMSD_ATOM_SETS.get(requested.lower(), requested)

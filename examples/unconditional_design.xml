@@ -1,0 +1,58 @@
+<!--
+  Unconditional design: RFdiffusion builds backbones from nothing, LigandMPNN
+  designs a sequence for each, ColabFold refolds them.
+
+      rosetta_link_scripts \
+          -parser:protocol examples/unconditional_design.xml \
+          -out:path output/unconditional
+
+  No input structure: the contig names only de novo residues, so there is no
+  -s and no inference.input_pdb. 2 backbones x 2 sequences = 4 designs.
+
+  Every residue is new, so rfd_new_backbone and rfd_all are the same set and
+  there is no rfd_fixed or rfd_motif.
+
+  Filters are left out on purpose. A filter in the PROTOCOLS list runs on the
+  primary pose only, so its column would be blank for every design but the
+  first. To score each one, wrap the filters in a MultiplePoseMover with a
+  nested ROSETTASCRIPTS; examples/general_example_with_per_pose_scoring.xml shows that. The
+  predictor metrics above need no wrapper: ColabFold attaches them to every
+  pose it produces.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <ResiduePDBInfoHasLabel name="rfd_new_backbone" property="rfd_new_backbone" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <RFdiffusion name="design_backbone"
+            contig="[100-100]"
+            num_designs="2"
+            batch="true"
+            prefix_name="rfd_" />
+
+        <LigandMPNN name="design_sequence"
+            batch="true"
+            batch_size="2"
+            prefix_name="mpnn_" />
+
+        <ColabFold name="predict_structure"
+            batch="true"
+            models="1,2"
+            msa_mode="single_sequence"
+            prefix_name="AF2_"
+            replace_pose="true">
+            <RMSD name="scRMSD_all" calculation="rfd_all" />
+            <metric name="plddt_all" selector="rfd_all" />
+            <metric name="pAE_all" selector="rfd_all" />
+        </ColabFold>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+        <Add mover="design_sequence" />
+        <Add mover="predict_structure" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

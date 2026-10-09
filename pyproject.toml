@@ -13,10 +13,24 @@ dependencies = [
     #"pyrosetta>=2025.47",
     "pyrosetta",
     "biopython",
+    "pyyaml",
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+rosetta_link_scripts = "rosettalink.scripts.run_xml:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Integration tests need PyRosetta and a recorded fixture, so a bare pytest
+# runs the unit tests only. Run them with: pytest tests/integration
+testpaths = ["tests/unit"]
+# The package is importable from the checkout without installing it.
+pythonpath = ["src"]

@@ -1,0 +1,43 @@
+<!--
+  Does this PyRosetta build understand FOR_EACH_POSE?
+
+      rosetta_link_scripts \
+          -parser:protocol docs/for_each_pose_check.xml \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/fep_check
+
+  Seconds to run: no GPU, no container, no external program, and no
+  RosettaLink mover. The only thing under test is whether the parser accepts
+  the FOR_EACH_POSE element.
+
+  A build carrying RosettaCommons/rosetta pull request 494 runs it and writes
+  one structure with a netcharge column.
+
+  A build without it stops at XmlObjects.create_from_string with
+
+      Error: Element 'FOR_EACH_POSE': This element is not expected.
+
+  The same filter is applied twice on purpose. The copy outside the block is
+  the control: it uses the ordinary PROTOCOLS path, so a failure that is not
+  about FOR_EACH_POSE shows up as both of them failing, not one.
+
+  This says nothing about whether poses are iterated correctly, only that the
+  element parses. See docs/two_helices.xml for a protocol that uses it for
+  real, and examples/general_example_with_per_pose_scoring.xml for the MultiplePoseMover form
+  that runs on a stock release.
+-->
+<ROSETTASCRIPTS>
+
+    <FILTERS>
+        <NetCharge name="netcharge" confidence="0" />
+        <NetCharge name="netcharge_control" confidence="0" />
+    </FILTERS>
+
+    <PROTOCOLS>
+        <Add filter="netcharge_control" />
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add filter="netcharge" />
+        </PROTOCOLS></FOR_EACH_POSE>
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
