@@ -29,16 +29,13 @@
         <RFdiffusion name="design_backbone"
             contig="[100-100]"
             num_designs="2"
-            batch="true"
             prefix_name="rfd_" />
 
         <LigandMPNN name="design_sequence"
-            batch="true"
             batch_size="2"
             prefix_name="mpnn_" />
 
         <ColabFold name="predict_structure"
-            batch="true"
             models="1,2"
             msa_mode="single_sequence"
             prefix_name="AF2_"

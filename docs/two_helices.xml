@@ -11,10 +11,9 @@
           -var num_backbones=2 \
           -var num_sequences=3
 
-  batch="true" on all three movers hands every pose from one stage to the next
-  through the RosettaLink pose buffer, so num_backbones x num_sequences
-  structures come out: 2 x 3 = 6 with the values above. Each external program
-  runs once per stage rather than once per pose.
+  Each stage receives every pose of the stage before it, so num_backbones x
+  num_sequences structures come out: 2 x 3 = 6 with the values above, and
+  each external program runs once per stage rather than once per pose.
 
   FOR_EACH_POSE applies the filters and simple metrics to every one of those
   structures. It needs a PyRosetta build carrying RosettaCommons/rosetta pull
@@ -54,20 +53,17 @@
         <RFdiffusion name="design_backbone"
             contig="{contig}"
             num_designs="{num_backbones}"
-            batch="true"
             prefix_name="rfd_"
             extra_args="inference.input_pdb=input.pdb"
             work_dir="01_rfdiff" />
 
         <LigandMPNN name="design_sequence"
-            batch="true"
             batch_size="{num_sequences}"
             residues_to_design="redesign_these"
             prefix_name="mpnn_"
             work_dir="02_LigandMPNN" />
 
         <ColabFold name="predict_structure"
-            batch="true"
             models="1,2"
             msa_mode="single_sequence"
             rank="auto"

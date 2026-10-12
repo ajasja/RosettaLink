@@ -4,7 +4,7 @@ These run a whole protocol through rosetta_link_scripts with the external
 programs replaced by the stubs in stubs/, which replay the output of a real
 run recorded under fixtures/. They need PyRosetta but no GPU and no wrapped
 tool, so they exercise everything RosettaLink does between one program and
-the next: command construction, output discovery, reslabels, the pose buffer,
+the next: command construction, output discovery, reslabels, the batched pose handover,
 score keys and the RMSD metrics.
 
 Record a new fixture by running the same protocol for real with work_dir set
@@ -57,7 +57,6 @@ def run_protocol(tmp_path_factory):
 			pytest.skip(f"no recorded {fixture} fixture for {missing}")
 
 		from rosettalink.scripts.run_xml import main
-		from rosettalink.utils import pose_buffer
 
 		tmp_path = tmp_path_factory.mktemp(fixture)
 		output_dir = tmp_path / "output"
@@ -80,12 +79,10 @@ def run_protocol(tmp_path_factory):
 		previous_fixture = os.environ.get("ROSETTALINK_STUB_FIXTURE")
 		os.environ["ROSETTALINK_STUB_FIXTURE"] = str(FIXTURES / fixture)
 		os.chdir(tmp_path)
-		pose_buffer.clear()
 		try:
 			main(argv)
 		finally:
 			os.chdir(previous_dir)
-			pose_buffer.clear()
 			if previous_fixture is None:
 				os.environ.pop("ROSETTALINK_STUB_FIXTURE", None)
 			else:

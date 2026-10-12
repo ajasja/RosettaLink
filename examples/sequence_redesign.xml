@@ -41,13 +41,11 @@
         <AddResidueLabel name="label_target" residue_selector="chain_b" label="target" />
 
         <LigandMPNN name="design_sequence"
-            batch="true"
             batch_size="4"
             chains_to_design="A"
             prefix_name="mpnn_" />
 
         <ColabFold name="predict_structure"
-            batch="true"
             models="1,2"
             msa_mode="single_sequence"
             prefix_name="AF2_"

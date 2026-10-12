@@ -132,11 +132,14 @@ A structure read from a pdb carries no reslabels at all, so a protocol that
 starts from one stamps its own with `AddResidueLabel` before anything selects
 on them; `sequence_redesign.xml` shows that.
 
-`batch="true"` hands every pose from one stage to the next through the
-RosettaLink pose buffer, so each external program runs once per stage instead
-of once per pose. Leave it false inside a `MultiplePoseMover`, which already
-hands over one pose at a time.
+Every stage receives all the poses of the stage before it, so each external
+program runs once per stage instead of once per pose. This is not optional and
+takes no attribute: the movers inherit `BatchedMultiplePoseMover`, and
+`ParsedProtocol` hands them the set. A stage placed inside a `FOR_EACH_POSE`
+receives one pose at a time, and works the same way.
 
 `docs/two_helices.xml` is the same pipeline written with `FOR_EACH_POSE`, and
 `docs/for_each_pose_check.xml` tells you in seconds whether a PyRosetta build
-supports that syntax. No build we can reach does yet.
+supports that syntax. It needs a build carrying
+RosettaCommons/rosetta pull request 494; `docs/two_helices_ss_filter.xml`
+additionally filters between two stages, which only such a build can do.

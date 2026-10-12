@@ -16,9 +16,8 @@
 # Each chain of the pose becomes its own entry of the fasta record, colon
 # separated, which is how colabfold_batch denotes a complex.
 #
-# batch="true" folds every pose published by the previous RosettaLink stage in
-# one colabfold_batch invocation instead of one per pose. See
-# rosettalink.utils.PoseBuffer.
+# Every pose of the step before is folded in one colabfold_batch invocation
+# instead of one per pose. See movers.BaseLinkMover.
 #
 # An RMSD subtag measures a self consistency RMSD: calculation names the
 # residues it is measured over and alignment the residues it is superimposed
@@ -46,7 +45,6 @@ from pyrosetta.rosetta.core.pose import setPoseExtraScore
 from rosettalink.decorators import register_mover
 from rosettalink.utils import get_run_command
 from rosettalink.utils import parse_fasta_records
-from rosettalink.utils import pose_buffer
 from rosettalink.utils import pose_chain_sequences
 from rosettalink.utils import resolve_rmsd_atoms
 from rosettalink.utils import run_and_log
@@ -62,7 +60,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         self,
         replace_pose=True,
         fasta="",
-        batch=False,
         models="1,2,3,4,5",
         msa_mode="single_sequence",
         rank="auto",
@@ -72,17 +69,16 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         extra_args=None,
         work_dir=None,
     ):
-        pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
+        BaseLinkMover.BaseLinkMover.__init__(self)
         self.rmsd_metrics = []
         self.confidence_metrics = []
         # Populated by apply(): one pose per record beyond the first, exposed
-        # through get_additional_output(). Unused while batch is set, where
+        # through get_additional_output(). Unused while the results go
         # the poses are served from the shared buffer instead.
         self.additional_poses_ = []
 
         self.replace_pose_ = replace_pose
         self.fasta_ = fasta
-        self.batch_ = batch
         self.models_ = models
         self.msa_mode_ = msa_mode
         self.rank_ = rank
@@ -98,7 +94,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         self.tracer_info << (
             f"Initializing ColabFold:\n"
             f"\treplace_pose: {self.replace_pose_}\n"
-            f"\tbatch: {self.batch_}\n"
             f"\tmodels: {self.models_}\n"
             f"\tmsa_mode: {self.msa_mode_}\n"
             f"\trank: {self.rank_}\n"
@@ -112,7 +107,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         copy = ColabFold()
         copy.replace_pose_ = self.replace_pose_
         copy.fasta_ = self.fasta_
-        copy.batch_ = self.batch_
         copy.models_ = self.models_
         copy.msa_mode_ = self.msa_mode_
         copy.rank_ = self.rank_
@@ -146,7 +140,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         #
         # With fasta set the records come from that file and have no
         # correspondence to any input pose. Otherwise they come from the
-        # poses: every pose of the batch, or just the one handed in.
+        # poses handed over by the step before, or just the one passed in.
         if self.fasta_:
             records = parse_fasta_records(self.fasta_)
             input_poses = []
@@ -155,7 +149,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             ) and self.tracer_info.flush()
         else:
             input_poses = (
-                pose_buffer.consume(pose, self.tracer_warning) if self.batch_ else [pose]
+                self.take_input_poses(pose)
             )
             records = [
                 (f"design_{index}", pose_chain_sequences(input_pose))
@@ -163,7 +157,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             ]
             self.tracer_info << (
                 f"Folding {len(records)} pose(s) in one invocation\n"
-                if self.batch_ else f"Folding 1 pose\n"
             ) and self.tracer_info.flush()
 
         with work_dir(self.work_dir_, self.tracer_debug) as run_dir:
@@ -202,11 +195,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             # gets the first prediction.
             pose.assign(predicted_poses[0])
 
-            if self.batch_:
-                pose_buffer.publish(self, predicted_poses)
-                self.additional_poses_ = []
-            else:
-                self.additional_poses_ = list(predicted_poses[1:])
+            self.additional_poses_ = list(predicted_poses[1:])
 
     def _best_prediction_pdb(self, run_dir, record_id):
         """The rank_001 pdb colabfold_batch wrote for one record. The trailing
@@ -390,10 +379,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
 
     def get_additional_output(self):
         # Pull-one-at-a-time: pops and returns one additional pose per call,
-        # None once exhausted. While batching, the poses come from the shared
-        # buffer and are served only until a downstream mover takes them.
-        if self.batch_:
-            return pose_buffer.pop_for(self)
+        # None once exhausted.
         if not self.additional_poses_:
             return None
         return self.additional_poses_.pop(0)
@@ -407,7 +393,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         self.run_command_ = tag.get_option_string("run_command") if tag.hasOption("run_command") else ""
         self.cmd_header_ = tag.get_option_string("cmd_header") if tag.hasOption("cmd_header") else ""
         self.fasta_ = tag.get_option_string("fasta") if tag.hasOption("fasta") else ""
-        self.batch_ = tag.get_option_bool("batch") if tag.hasOption("batch") else False
         self.replace_pose_ = tag.get_option_bool("replace_pose") if tag.hasOption("replace_pose") else True
         self.models_ = tag.get_option_string("models") if tag.hasOption("models") else "1,2,3,4,5"
         self.msa_mode_ = tag.get_option_string("msa_mode") if tag.hasOption("msa_mode") else "single_sequence"
@@ -419,7 +404,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         self.tracer_info << (
             f"Parsing options:\n"
             f"\treplace_pose: {self.replace_pose_}\n"
-            f"\tbatch: {self.batch_}\n"
             f"\tmodels: {self.models_}\n"
             f"\tmsa_mode: {self.msa_mode_}\n"
             f"\trank: {self.rank_}\n"
@@ -532,11 +516,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             XMLSchemaType(xs_string),
             "Deprecated name for run_command, kept so existing protocols keep working",
             ""))
-        attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "batch",
-            XMLSchemaType(xs_boolean),
-            "Whether to fold every pose published by the previous RosettaLink mover in one colabfold_batch invocation, instead of one invocation per pose. Leave false when the mover sits inside a FOR_EACH_POSE or MultiplePoseMover, which hands it one pose at a time",
-            "false"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "replace_pose",
             XMLSchemaType(xs_boolean),

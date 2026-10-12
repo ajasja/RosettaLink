@@ -49,20 +49,17 @@
         <RFdiffusion name="design_backbone"
             contig="{contig}"
             num_designs="{num_backbones}"
-            batch="true"
             prefix_name="rfd_"
             extra_args="inference.input_pdb=input.pdb"
             work_dir="01_rfdiff" />
 
         <LigandMPNN name="design_sequence"
-            batch="true"
             batch_size="{num_sequences}"
             residues_to_design="redesign_these"
             prefix_name="mpnn_"
             work_dir="02_LigandMPNN" />
 
         <ColabFold name="predict_structure"
-            batch="true"
             models="1,2"
             msa_mode="single_sequence"
             rank="auto"

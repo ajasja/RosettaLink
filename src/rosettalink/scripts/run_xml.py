@@ -171,7 +171,7 @@ def main(argv=None):
 
     import pyrosetta
     from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
-    from rosettalink.utils import drain_additional_output, pose_buffer
+    from rosettalink.utils import drain_additional_output
 
     protocol_path = Path(arguments.protocol)
     if not protocol_path.is_file():
@@ -193,9 +193,6 @@ def main(argv=None):
     for path, run in jobs:
         protocol = XmlObjects.create_from_string(xml_text).get_mover("ParsedProtocol")
 
-        # Poses published by the previous job are not inputs to this one.
-        pose_buffer.clear()
-
         if path is None:
             pose = pyrosetta.Pose()
             stem = "from_protocol"
@@ -207,7 +204,7 @@ def main(argv=None):
 
         print(f"=== {stem}: applying {protocol_path.name} ===")
         protocol.apply(pose)
-        results = [pose] + drain_additional_output(protocol) + pose_buffer.drain()
+        results = [pose] + drain_additional_output(protocol)
         print(f"=== {stem}: {len(results)} output structure(s) ===")
 
         for index, result in enumerate(results):

@@ -17,7 +17,7 @@
 # prefix_name is put in front of every reslabel the mover stamps, so several
 # stages can label the same pose without colliding.
 #
-# batch="true" takes every pose published by the previous RosettaLink stage
+# Every pose of the step before is taken as an input structure
 # rather than only the one handed in, and publishes every design for the next
 # stage. RFdiffusion reads one structure per invocation, so this composes the
 # pipeline without reducing the number of invocations; each input gets its own
@@ -28,7 +28,6 @@ import os
 import pyrosetta
 from rosettalink.decorators import register_mover
 from rosettalink.utils import get_run_command
-from rosettalink.utils import pose_buffer
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
 from rosettalink.utils import work_dir
@@ -44,32 +43,30 @@ import numpy as np
 class RFdiffusion(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
-    def __init__(self, contig=None, num_designs=None, run_command="", batch=False, extra_args=None, work_dir=None, prefix_name=""):
-        pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
+    def __init__(self, contig=None, num_designs=None, run_command="", extra_args=None, work_dir=None, prefix_name=""):
+        BaseLinkMover.BaseLinkMover.__init__(self)
         self.contig_ = contig
         self.num_designs_ = num_designs
         self.run_command_ = run_command
-        self.batch_ = batch
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
         self.prefix_name_ = prefix_name
         # Populated by apply(): every design beyond the first, exposed to the
         # rest of the Rosetta suite (JD2, RosettaScripts, ...) via the
         # standard Mover::get_additional_output() one-to-many mechanism.
-        # Unused while batch is set, where the designs are served from the
+        # Filled by apply() and drained one design at a time by
         # shared buffer instead.
         self.additional_poses_ = None
 
         self.tracer_fatal, self.tracer_error, self.tracer_warning, self.tracer_info, self.tracer_debug, self.tracer_trace, *_ = setup_tracer("[RFdiffusion]")
 
-        self.tracer_info << f"Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, run_command: {self.run_command_}, batch: {self.batch_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
+        self.tracer_info << f"Initialized with contig: {self.contig_}, num_designs: {self.num_designs_}, run_command: {self.run_command_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
 
     def clone(self):
         copy = RFdiffusion()
         copy.contig_ = self.contig_
         copy.num_designs_ = self.num_designs_
         copy.run_command_ = self.run_command_
-        copy.batch_ = self.batch_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
         copy.prefix_name_ = self.prefix_name_
@@ -78,7 +75,7 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
 
     def apply(self, pose):
         run_command = get_run_command(self.mover_name(), self.run_command_)
-        input_poses = pose_buffer.consume(pose, self.tracer_warning) if self.batch_ else [pose]
+        input_poses = self.take_input_poses(pose)
 
         with work_dir(self.work_dir_, self.tracer_debug) as run_dir:
             # We are already in tmp_dir (run_dir) at this point.
@@ -101,20 +98,16 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
             # distributor (and therefore rosetta_scripts, RosettaScripts-driven
             # PyRosetta code, MultiplePoseMover, etc.) automatically drains this
             # after apply() and emits one output structure per pose, exactly like
-            # any other native multi-output mover. While batching they go to the
+            # any other native multi-output mover.
             # shared buffer instead, for the next RosettaLink mover to pick up.
-            if self.batch_:
-                pose_buffer.publish(self, designed_poses)
-                self.additional_poses_ = []
-            else:
-                self.additional_poses_ = list(designed_poses[1:])
+            self.additional_poses_ = list(designed_poses[1:])
 
     def _run_one(self, input_pose, design_dir, run_command):
         """Runs RFdiffusion once over one input structure and returns every
         design it wrote, loaded and labelled.
 
         Runs from inside design_dir so every path handed to RFdiffusion stays
-        relative, whichever directory the batch put this input in."""
+        relative, whichever directory this input was put in."""
         previous_dir = os.getcwd()
         os.makedirs(design_dir, exist_ok=True)
         os.chdir(design_dir)
@@ -226,10 +219,6 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         # Pull-one-at-a-time: pops and returns one design per call, None once
         # exhausted. Called by JD2/RosettaScripts (and anything else driving
         # this mover through the standard Mover API) right after apply().
-        # While batching, the designs come from the shared buffer and are
-        # served only until a downstream mover takes them.
-        if self.batch_:
-            return pose_buffer.pop_for(self)
         if not self.additional_poses_:
             return None
         return self.additional_poses_.pop(0)
@@ -244,12 +233,11 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
         self.contig_ = tag.get_option_string("contig")
         self.num_designs_ = tag.get_option_int("num_designs")
         self.run_command_ = tag.get_option_string("run_command") if tag.hasOption("run_command") else ""
-        self.batch_ = tag.get_option_bool("batch") if tag.hasOption("batch") else False
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else None
         self.prefix_name_ = tag.get_option_string("prefix_name") if tag.hasOption("prefix_name") else ""
 
-        self.tracer_info << f"Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, run_command: {self.run_command_}, batch: {self.batch_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
+        self.tracer_info << f"Parsed options: contig: {self.contig_}, num_designs: {self.num_designs_}, run_command: {self.run_command_}, extra_args: {self.extra_args_}, work_dir: {self.work_dir_} \n" and self.tracer_info.flush()
 
 
 
@@ -260,7 +248,7 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
     @classmethod
     def provide_xml_schema(cls, xsd):
         from pyrosetta.rosetta.utility.tag import XMLSchemaAttribute, XMLSchemaType
-        from pyrosetta.rosetta.utility.tag import xs_string, xs_integer, xs_boolean
+        from pyrosetta.rosetta.utility.tag import xs_string, xs_integer
 
         attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
         attrlist.append(XMLSchemaAttribute.required_attribute(
@@ -276,11 +264,6 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
             XMLSchemaType(xs_string),
             "Command that runs RFdiffusion run_inference.py, e.g. singularity run --nv /path/to/rfdiffusion.sif, or /path/to/python /path/to/RFdiffusion/scripts/run_inference.py. Taken from the RFdiffusion section of rosettalink.config.yaml when not set here",
             ""))
-        attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "batch",
-            XMLSchemaType(xs_boolean),
-            "Whether to take every pose published by the previous RosettaLink mover rather than only the one handed in, and publish every design for the next one. Leave false when the mover sits inside a FOR_EACH_POSE or MultiplePoseMover, which hands it one pose at a time",
-            "false"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "extra_args",
             XMLSchemaType(xs_string),

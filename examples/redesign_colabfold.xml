@@ -10,7 +10,7 @@
           -var num_sequences=2 \
           -var work_dir=output/redesign
 
-  batch="true" on both stages hands every design from one mover to the next
+  Each stage receives every design of the stage before it
   through the RosettaLink pose buffer, so ColabFold folds all of them in a
   single invocation instead of one invocation per sequence. The protocol
   produces num_sequences output structures.
@@ -28,12 +28,10 @@
         <AddResidueLabel name="label_all" residue_selector="full_pose" label="all" />
 
         <LigandMPNN name="make_sequence"
-            batch="true"
             batch_size="{num_sequences}"
             work_dir="{work_dir}/ligandmpnn" />
 
         <ColabFold name="predict_structure"
-            batch="true"
             models="1"
             msa_mode="single_sequence"
             prefix_name="AF2_"

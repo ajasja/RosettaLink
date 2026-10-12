@@ -10,14 +10,14 @@
 # When the attribute is not set the value comes from the LigandMPNN section of
 # rosettalink.config.yaml.
 #
-# batch="true" designs sequences for every pose published by the previous
+# Sequences are designed for every pose of the step before in one
 # RosettaLink stage in one invocation, through LigandMPNN --pdb_path_multi,
 # instead of one invocation per pose.
 #
 # Every LigandMPNN command line option is exposed as an attribute of the same
 # name and passed through only when set, so LigandMPNN own defaults apply
 # otherwise. The exceptions are pdb_path and out_folder, which the mover
-# sets, and the *_multi options, which the mover writes itself when batching.
+# sets, and the *_multi options, which the mover writes itself.
 #
 # fixed_reslabel and redesigned_reslabel take a residue label instead of a
 # residue list, and residues_to_design takes a residue selector by name; all
@@ -46,7 +46,6 @@ from pyrosetta.rosetta.core.select.residue_selector import get_residue_selector
 
 from rosettalink.decorators import register_mover
 from rosettalink.utils import get_run_command
-from rosettalink.utils import pose_buffer
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
 from rosettalink.utils import work_dir
@@ -110,7 +109,6 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         model_type="protein_mpnn",
         checkpoint_protein_mpnn=DEFAULT_CHECKPOINT,
         run_command="",
-        batch=False,
         batch_size="1",
         number_of_batches="1",
         fixed_reslabel="",
@@ -121,11 +119,10 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         work_dir=None,
         **options
     ):
-        pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
+        BaseLinkMover.BaseLinkMover.__init__(self)
         self.model_type_ = model_type
         self.checkpoint_protein_mpnn_ = checkpoint_protein_mpnn
         self.run_command_ = run_command
-        self.batch_ = batch
         # Total sequences designed per input pose = batch_size * number_of_batches.
         self.batch_size_ = batch_size
         self.number_of_batches_ = number_of_batches
@@ -150,7 +147,6 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             f"\tmodel_type: {self.model_type_}\n"
             f"\tcheckpoint_protein_mpnn: {self.checkpoint_protein_mpnn_}\n"
             f"\trun_command: {self.run_command_}\n"
-            f"\tbatch: {self.batch_}\n"
             f"\tbatch_size: {self.batch_size_}\n"
             f"\tnumber_of_batches: {self.number_of_batches_}\n"
             f"\tfixed_reslabel: {self.fixed_reslabel_}\n"
@@ -164,7 +160,6 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         copy.model_type_ = self.model_type_
         copy.checkpoint_protein_mpnn_ = self.checkpoint_protein_mpnn_
         copy.run_command_ = self.run_command_
-        copy.batch_ = self.batch_
         copy.batch_size_ = self.batch_size_
         copy.number_of_batches_ = self.number_of_batches_
         copy.fixed_reslabel_ = self.fixed_reslabel_
@@ -256,7 +251,7 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         # Keep a copy of every pose as handed to us, so reslabels set by
         # earlier movers can be carried forward onto each designed sequence
         # below - LigandMPNN output pdbs carry no pdb_info at all.
-        input_poses = pose_buffer.consume(pose, self.tracer_warning) if self.batch_ else [pose]
+        input_poses = self.take_input_poses(pose)
         input_poses = [input_pose.clone() for input_pose in input_poses]
 
         with work_dir(self.work_dir_) as run_dir:
@@ -378,14 +373,10 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
 
             # Every further sequence is handed off through
             # Mover::get_additional_output(), the standard Rosetta one-to-many
-            # mechanism, instead of being silently discarded. While batching
+            # mechanism, instead of being silently discarded. The designs
             # they go to the shared buffer instead, for the next RosettaLink
             # mover.
-            if self.batch_:
-                pose_buffer.publish(self, designed_poses)
-                self.additional_poses_ = []
-            else:
-                self.additional_poses_ = list(designed_poses[1:])
+            self.additional_poses_ = list(designed_poses[1:])
 
     def _load_and_label_design(self, pdb_file, input_pose, redesigned_resnums=()):
         """Load one designed sequence, carry over the reslabels of the input
@@ -411,12 +402,8 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         return pose
 
     def get_additional_output(self):
-        # Pull-one-at-a-time: pops and returns one designed sequence per
-        # call, None once exhausted. While batching, the sequences come from
-        # the shared buffer and are served only until a downstream mover
-        # takes them.
-        if self.batch_:
-            return pose_buffer.pop_for(self)
+        # Pull-one-at-a-time: pops and returns one designed sequence per call,
+        # None once exhausted.
         if not self.additional_poses_:
             return None
         return self.additional_poses_.pop(0)
@@ -429,7 +416,6 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         self.model_type_ = tag.get_option_string("model_type") if tag.hasOption("model_type") else "protein_mpnn"
         self.checkpoint_protein_mpnn_ = tag.get_option_string("checkpoint_protein_mpnn") if tag.hasOption("checkpoint_protein_mpnn") else DEFAULT_CHECKPOINT
         self.run_command_ = tag.get_option_string("run_command") if tag.hasOption("run_command") else ""
-        self.batch_ = tag.get_option_bool("batch") if tag.hasOption("batch") else False
         self.batch_size_ = tag.get_option_string("batch_size") if tag.hasOption("batch_size") else "1"
         self.number_of_batches_ = tag.get_option_string("number_of_batches") if tag.hasOption("number_of_batches") else "1"
         self.fixed_reslabel_ = tag.get_option_string("fixed_reslabel") if tag.hasOption("fixed_reslabel") else ""
@@ -453,7 +439,6 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             f"\tmodel_type: {self.model_type_}\n"
             f"\tcheckpoint_protein_mpnn: {self.checkpoint_protein_mpnn_}\n"
             f"\trun_command: {self.run_command_}\n"
-            f"\tbatch: {self.batch_}\n"
             f"\tbatch_size: {self.batch_size_}\n"
             f"\tnumber_of_batches: {self.number_of_batches_}\n"
             f"\tfixed_reslabel: {self.fixed_reslabel_}\n"
@@ -470,7 +455,7 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
     @classmethod
     def provide_xml_schema(cls, xsd):
         from pyrosetta.rosetta.utility.tag import XMLSchemaAttribute, XMLSchemaType
-        from pyrosetta.rosetta.utility.tag import xs_string, xs_integer, xs_boolean
+        from pyrosetta.rosetta.utility.tag import xs_string, xs_integer
 
         attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
@@ -488,11 +473,6 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             XMLSchemaType(xs_string),
             "Command that runs LigandMPNN run.py, e.g. singularity run --nv /path/to/ligandmpnn.sif, or /path/to/python /path/to/LigandMPNN/run.py. Taken from the LigandMPNN section of rosettalink.config.yaml when not set here",
             ""))
-        attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "batch",
-            XMLSchemaType(xs_boolean),
-            "Whether to design sequences for every pose published by the previous RosettaLink mover in one invocation, through LigandMPNN --pdb_path_multi, instead of one invocation per pose. Leave false when the mover sits inside a FOR_EACH_POSE or MultiplePoseMover, which hands it one pose at a time",
-            "false"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "batch_size",
             XMLSchemaType(xs_integer),

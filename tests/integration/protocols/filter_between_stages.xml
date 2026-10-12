@@ -1,0 +1,50 @@
+<!--
+  A FOR_EACH_POSE holding a filter between two batched stages.
+
+  drop_the_longer passes a backbone whose chain A is at most
+  max_binder_residues long, at confidence="1", so a longer one fails the
+  protocol inside FOR_EACH_POSE and never reaches LigandMPNN. The number of
+  output structures is therefore the number of surviving backbones times
+  batch_size.
+
+  Used by tests/integration/test_filter_between_stages.py against the binder
+  fixture, whose two backbones differ in chain A length by one residue.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <Chain name="binder" chains="A" />
+        <ResiduePDBInfoHasLabel name="rfd_new_backbone" property="rfd_new_backbone" />
+    </RESIDUE_SELECTORS>
+
+    <FILTERS>
+        <ResidueCount name="drop_the_longer"
+            residue_selector="binder"
+            max_residue_count="{max_binder_residues}"
+            confidence="1" />
+    </FILTERS>
+
+    <MOVERS>
+        <RFdiffusion name="design_backbone"
+            contig="{contig}"
+            num_designs="{num_backbones}"
+            prefix_name="rfd_"
+            extra_args="inference.input_pdb=input.pdb"
+            work_dir="{work_dir}/01_rfdiff" />
+
+        <LigandMPNN name="design_sequence"
+            batch_size="{num_sequences}"
+            residues_to_design="rfd_new_backbone"
+            prefix_name="mpnn_"
+            work_dir="{work_dir}/02_LigandMPNN" />
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add filter="drop_the_longer" />
+        </PROTOCOLS></FOR_EACH_POSE>
+        <Add mover="design_sequence" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

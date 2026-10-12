@@ -1,0 +1,128 @@
+<!--
+  two_helices.xml with a FOR_EACH_POSE between backbone generation and
+  sequence design, filtering backbones on their secondary structure.
+
+      rosetta_link_scripts \
+          -parser:protocol docs/two_helices_ss_filter.xml \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/two_helices_ss_filter \
+          -var contig=[B1-150/0 90-120] \
+          -var num_backbones=4 \
+          -var num_sequences=2 \
+          -var min_ss_elements=3
+
+  min_three_ss counts helices of 4 or more residues and strands of 3 or more
+  over chain A, the de novo binder, and passes a design carrying at least
+  min_ss_elements of them. It runs at confidence="1", so a backbone that does
+  not reach the count fails the protocol inside FOR_EACH_POSE and is dropped
+  from the set that reaches LigandMPNN. The filter computes DSSP itself.
+
+  A threshold at or below the number of elements the contig already produces
+  drops nothing. To see designs rejected, raise min_ss_elements until it sits
+  inside the range the backbones span. Count the elements of a structure with
+  the same filter at return_total="true"; report_sm returns 0 otherwise,
+  whatever the pose.
+
+  The reslabel selector rfd_new_backbone selects the same residues as chain A
+  here and does not depend on how RFdiffusion lettered the chains.
+
+  Reading the result: compare the number of backbones RFdiffusion wrote in
+  01_rfdiff with the number of structures in the output, and with the count
+  of "Secondary structure count" lines in the log. Under the pose buffer, a
+  dropped first pose leaves LigandMPNN a single pose, and a dropped later pose
+  does not reach LigandMPNN at all, so the output count is only meaningful
+  together with which poses the filter rejected.
+-->
+<ROSETTASCRIPTS>
+
+    <SCOREFXNS>
+        <ScoreFunction name="sfxn" weights="ref2015" />
+    </SCOREFXNS>
+
+    <RESIDUE_SELECTORS>
+        <True name="full_pose" />
+        <Chain name="binder" chains="A" />
+        <ResiduePDBInfoHasLabel name="rfd_new_backbone" property="rfd_new_backbone" />
+        <ResiduePDBInfoHasLabel name="rfd_fixed" property="rfd_fixed" />
+        <ResiduePDBInfoHasLabel name="rfd_hidden_sidechains" property="rfd_hidden_sidechains" />
+        <Neighborhood name="near_rfd_new_backbone" selector="rfd_new_backbone" distance="10.0" />
+        <Or name="redesign_these"
+            selectors="rfd_new_backbone,rfd_hidden_sidechains,near_rfd_new_backbone" />
+    </RESIDUE_SELECTORS>
+
+    <SIMPLE_METRICS>
+        <SapScoreMetric name="sap_score"
+            score_selector="full_pose"
+            sap_calculate_selector="full_pose"
+            sasa_selector="full_pose" />
+    </SIMPLE_METRICS>
+
+    <MOVERS>
+        <RFdiffusion name="design_backbone"
+            contig="{contig}"
+            num_designs="{num_backbones}"
+            prefix_name="rfd_"
+            extra_args="inference.input_pdb=input.pdb"
+            work_dir="01_rfdiff" />
+
+        <LigandMPNN name="design_sequence"
+            batch_size="{num_sequences}"
+            residues_to_design="redesign_these"
+            prefix_name="mpnn_"
+            work_dir="02_LigandMPNN" />
+
+        <ColabFold name="predict_structure"
+            models="1,2"
+            msa_mode="single_sequence"
+            rank="auto"
+            prefix_name="AF2_"
+            replace_pose="true"
+            work_dir="03_colabfold">
+
+            <RMSD name="scRMSD_all" calculation="rfd_all" />
+            <RMSD name="scRMSD_new_backbone" calculation="rfd_new_backbone" />
+            <RMSD name="scRMSD_new_backbone_on_fixed"
+                  calculation="rfd_new_backbone" alignment="rfd_fixed" />
+
+            <metric name="plddt_all" selector="rfd_all" />
+            <metric name="plddt_new_backbone" selector="rfd_new_backbone" />
+            <metric name="pAE_all" selector="rfd_all" />
+            <metric name="pAE_new_backbone" selector="rfd_new_backbone" />
+        </ColabFold>
+    </MOVERS>
+
+    <FILTERS>
+        <SecondaryStructureCount name="min_three_ss"
+            residue_selector="binder"
+            filter_helix_sheet="true"
+            num_helix_sheet="{min_ss_elements}"
+            min_helix_length="4"
+            min_sheet_length="3"
+            confidence="1" />
+
+        <LongestContinuousApolarSegment name="apolar_segment"
+            residue_selector="full_pose"
+            confidence="0" />
+        <NetCharge name="netcharge" confidence="0" />
+        <BuriedUnsatHbonds2 name="buried_unsat"
+            scorefxn="sfxn"
+            jump_number="0"
+            confidence="0" />
+    </FILTERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add filter="min_three_ss" />
+        </PROTOCOLS></FOR_EACH_POSE>
+        <Add mover="design_sequence" />
+        <Add mover="predict_structure" />
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add metrics="sap_score" />
+            <Add filter="apolar_segment" />
+            <Add filter="netcharge" />
+            <Add filter="buried_unsat" />
+        </PROTOCOLS></FOR_EACH_POSE>
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

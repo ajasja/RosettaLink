@@ -38,18 +38,15 @@
         <RFdiffusion name="design_scaffold"
             contig="[10-40/A163-181/10-40]"
             num_designs="2"
-            batch="true"
             prefix_name="rfd_"
             extra_args="inference.input_pdb=input.pdb" />
 
         <LigandMPNN name="design_sequence"
-            batch="true"
             batch_size="2"
             fixed_reslabel="rfd_motif"
             prefix_name="mpnn_" />
 
         <ColabFold name="predict_structure"
-            batch="true"
             models="1,2"
             msa_mode="single_sequence"
             prefix_name="AF2_"
