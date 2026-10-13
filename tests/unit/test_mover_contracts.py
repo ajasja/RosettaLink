@@ -1,4 +1,4 @@
-"""Static checks over every mover source, from docs/writing_movers.md section 8.
+"""Static checks over every mover source.
 
 These read the source with ast rather than importing it, so they run without
 PyRosetta and catch the mistakes that otherwise only surface mid-job:
