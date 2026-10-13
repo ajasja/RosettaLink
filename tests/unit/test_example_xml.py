@@ -13,9 +13,7 @@ import pytest
 from rosettalink.scripts.run_xml import PLACEHOLDER
 
 EXAMPLES_DIR = Path(__file__).absolute().parents[2] / "examples"
-XML_FILES = sorted(EXAMPLES_DIR.glob("*.xml")) + sorted(
-	(EXAMPLES_DIR.parent / "docs").glob("*.xml")
-)
+XML_FILES = sorted(EXAMPLES_DIR.glob("*.xml"))
 
 
 @pytest.mark.parametrize("path", XML_FILES, ids=lambda path: path.name)

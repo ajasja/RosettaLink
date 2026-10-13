@@ -11,7 +11,7 @@ python -m pytest tests/integration -q
 A stub replays a directory recorded from a real run. That covers everything
 RosettaLink does between one program and the next, which is where its bugs
 are: the command it builds, the files it looks for afterwards, the reslabels
-it stamps, the pose buffer handing a fan-out to the next stage, the score
+it stamps, a fan-out handed to the next stage, the score
 keys, and the RMSD metrics.
 
 It does not cover the programs themselves. A stub keeps writing the layout it
@@ -87,6 +87,6 @@ warning on stderr and the stub prints a summary line at the end; a run that
 needs no reuse prints neither.
 
 The binder fixture holds four ColabFold predictions, recorded at two
-sequences per backbone. `docs/two_helices.xml` asks for three, so replaying it
-reuses two recordings. Recording a fixture at that protocol's own counts
-removes the reuse and makes this fallback inert.
+sequences per backbone. A protocol asking for three replays two recordings
+twice. Recording a fixture at that protocol's own counts removes the reuse
+and makes this fallback inert.

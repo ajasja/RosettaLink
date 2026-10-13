@@ -138,8 +138,9 @@ takes no attribute: the movers inherit `BatchedMultiplePoseMover`, and
 `ParsedProtocol` hands them the set. A stage placed inside a `FOR_EACH_POSE`
 receives one pose at a time, and works the same way.
 
-`docs/two_helices.xml` is the same pipeline written with `FOR_EACH_POSE`, and
-`docs/for_each_pose_check.xml` tells you in seconds whether a PyRosetta build
-supports that syntax. It needs a build carrying
-RosettaCommons/rosetta pull request 494; `docs/two_helices_ss_filter.xml`
-additionally filters between two stages, which only such a build can do.
+`FOR_EACH_POSE` needs a PyRosetta build carrying RosettaCommons/rosetta pull
+request 494, and `binder_design_advanced.xml` is the example that uses it,
+both to filter between two stages and to score every design at the end. On a
+build without it that protocol stops at parse time;
+`tests/integration/test_for_each_pose.py` says in seconds which build you
+have.
