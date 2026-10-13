@@ -224,3 +224,9 @@ CLAUDE.md
 # Locally built PyRosetta wheel and the files that build it.
 *.whl
 pyrosetta_pr494_wheel/
+
+# Stage directories left by examples/binder_design_advanced.xml
+/01_rfdiff/
+/02_ligandmpnn/
+/03_colabfold/
+/04_colabfold_binder/
