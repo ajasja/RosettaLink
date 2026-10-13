@@ -35,6 +35,11 @@
   for the binder, which has no homologues to align. existing_msa_file takes
   one entry per chain in chain order, so the leading comma is chain A.
 
+  atoms picks what an RMSD measures over and superimposes on. The default,
+  ca, uses alpha carbons, so it reports the fold and says nothing about the
+  sidechains; heavy adds them. A design can score well on one and badly on
+  the other. bb, bb_o, all, sc and sc_heavy are the rest.
+
   predict_only_binder folds the binder by itself. Its scRMSD says whether the
   binder keeps its designed fold without the target holding it in place, and
   replace_pose="false" keeps the complex as the structure that comes out.
@@ -100,6 +105,8 @@
             <RMSD name="scRMSD_binder" calculation_selector="rfd_new_backbone" />
             <RMSD name="scRMSD_binder_on_target"
                   calculation_selector="rfd_new_backbone" alignment_selector="rfd_fixed" />
+            <RMSD name="scRMSD_binder_sidechains"
+                  calculation_selector="rfd_new_backbone" atoms="heavy" />
 
             <metric name="plddt" base_metric="pLDDT" />
             <metric name="plddt_binder" base_metric="pLDDT" selector="rfd_new_backbone" />
