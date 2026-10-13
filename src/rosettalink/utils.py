@@ -1,13 +1,14 @@
 import os
 import re
 import shutil
-
-import pyrosetta
-from pyrosetta.rosetta.basic import Tracer, TracerPriority
-
 import tempfile
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
+
+# pyrosetta is imported inside the functions that need it, so this module can
+# be imported - and its configuration, pose-buffer, work_dir and fasta helpers
+# tested - in an environment without PyRosetta.
+
 
 def run_and_log(command, tracer_info, tracer_error):
     """Runs a command using os.system and also logs the command before running using print"""
@@ -23,6 +24,8 @@ def run_and_log(command, tracer_info, tracer_error):
         raise Exception(f" Command exited with exit code {exitCode}\n\n{dodatek}")
 
 def setup_tracer(mover_name):
+    from pyrosetta.rosetta.basic import Tracer, TracerPriority
+
     new_tracer_fatal = Tracer(mover_name, TracerPriority.t_fatal)
     new_tracer_error = Tracer(mover_name, TracerPriority.t_error)
     new_tracer_warning = Tracer(mover_name, TracerPriority.t_warning)
@@ -31,6 +34,97 @@ def setup_tracer(mover_name):
     new_tracer_trace = Tracer(mover_name, TracerPriority.t_trace)
     return new_tracer_fatal, new_tracer_error, new_tracer_warning, new_tracer_info, new_tracer_debug, new_tracer_trace
 
+
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
+
+# Name of the configuration file looked for when no path is given.
+CONFIG_FILENAME = "rosettalink.config.yaml"
+
+# Contents of the loaded configuration file. One key per mover name, each
+# holding that mover's settings:
+#
+#   RFdiffusion:
+#     run_command: singularity run --nv /path/to/rfdiffusion.sif
+#   ColabFold:
+#     run_command: colabfold_batch
+#
+# Populated by load_configuration(), which rosettalink.init() calls. Mutated
+# in place, so `from rosettalink.utils import configuration` stays valid.
+configuration = {}
+
+
+def config_search_paths(config=None):
+    """Paths load_configuration() looks at, in order. With config given that
+    is the only path; otherwise the current directory is tried before
+    ~/.rosettalink/."""
+    if config:
+        return [Path(config)]
+    return [
+        Path.cwd() / CONFIG_FILENAME,
+        Path.home() / ".rosettalink" / CONFIG_FILENAME,
+    ]
+
+
+def load_configuration(config=None):
+    """Loads a configuration file into `configuration` and returns the path it
+    came from together with every path looked at, so a caller reporting that
+    none was found does not walk them a second time.
+
+    Raises FileNotFoundError when config names a file that does not exist, so
+    a mistyped path is reported rather than silently ignored."""
+    import yaml
+
+    paths = config_search_paths(config)
+    for path in paths:
+        if not path.is_file():
+            continue
+        with open(path) as handle:
+            loaded = yaml.safe_load(handle) or {}
+        if not isinstance(loaded, dict):
+            raise RuntimeError(
+                f"{path} must hold a mapping of mover name to settings, got {type(loaded).__name__}"
+            )
+        configuration.clear()
+        configuration.update(loaded)
+        return str(path), paths
+
+    if config:
+        raise FileNotFoundError(f"Configuration file not found: {config}")
+    configuration.clear()
+    return None, paths
+
+
+def mover_configuration(mover_name):
+    """Settings of one mover from the loaded configuration, as a dict. Empty
+    when the file has no section for it."""
+    section = configuration.get(mover_name)
+    return section if isinstance(section, dict) else {}
+
+
+def get_run_command(mover_name, run_command=""):
+    """The command prefix that reaches the external program of mover_name.
+
+    The value given on the tag wins; otherwise it comes from the run_command
+    key of that mover's section in the configuration file. Raises naming both
+    when neither is set."""
+    if run_command:
+        return run_command
+
+    from_config = mover_configuration(mover_name).get("run_command", "")
+    if from_config:
+        return from_config
+
+    searched = ", ".join(str(path) for path in config_search_paths())
+    raise RuntimeError(
+        f"No run_command for {mover_name}. Either set run_command on the tag:\n"
+        f'    <{mover_name} name="..." run_command="..." />\n'
+        f"or add a section to {CONFIG_FILENAME}:\n"
+        f"    {mover_name}:\n"
+        f"      run_command: ...\n"
+        f"Configuration searched: {searched}"
+    )
 
 
 def parse_fasta_records(fasta_path, chain_separator=":"):
@@ -82,6 +176,13 @@ def parse_fasta_records(fasta_path, chain_separator=":"):
     return records
 
 
+def pose_chain_sequences(pose):
+    """Sequences of the pose, one per chain, in pose order. Used to build the
+    input of a structure predictor, so that a complex is folded as a complex
+    rather than as one fused polypeptide."""
+    return [chain.sequence() for chain in pose.split_by_chain()]
+
+
 def drain_additional_output(mover):
     """Collects every pose a one-to-many mover produced beyond the one
     already sitting in the pose apply() was given.
@@ -118,6 +219,8 @@ def resolve_rmsd_atoms(atoms):
     Accepts the short names in RMSD_ATOM_SETS ("ca", "heavy", ...) or a
     core::scoring::rmsd_atoms name ("rmsd_protein_bb_ca", ...) directly. The
     chosen atom set governs the superposition as well as the measurement."""
+    import pyrosetta
+
     rmsd_atoms = pyrosetta.rosetta.core.scoring.rmsd_atoms
     requested = atoms.strip()
     enum_name = RMSD_ATOM_SETS.get(requested.lower(), requested)
@@ -129,10 +232,36 @@ def resolve_rmsd_atoms(atoms):
     return getattr(rmsd_atoms, enum_name)
 
 
+# Directory a relative work_dir is kept under. rosetta_link_scripts sets it
+# to the run's output directory; without it a relative work_dir lands in the
+# directory the run started from.
+output_root = None
+
+
+def set_output_root(path):
+    """Sets the directory relative work_dir attributes are kept under."""
+    global output_root
+    output_root = Path(path).absolute() if path else None
+
+
+def resolve_work_dir(work_dir_):
+    """Where a work_dir attribute ends up: as given when absolute, under
+    output_root when one is set, and relative to the current directory
+    otherwise."""
+    if not work_dir_:
+        return None
+    path = Path(work_dir_)
+    if path.is_absolute():
+        return path
+    if output_root is not None:
+        return output_root / path
+    return path.absolute()
+
+
 @contextmanager
 def work_dir(work_dir_=None, tracer_debug=None):
         original_cwd = os.getcwd()
-        work_dir_ = Path(work_dir_).resolve() if work_dir_ else None # To allow relative and absolute passing of work_dir
+        work_dir_ = resolve_work_dir(work_dir_)
         temp_dir = tempfile.TemporaryDirectory()
         run_dir = Path(temp_dir.name)
         if tracer_debug:
