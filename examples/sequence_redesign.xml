@@ -1,0 +1,72 @@
+<!--
+  Sequence redesign: LigandMPNN designs new sequences for one chain of an
+  existing complex, holding the other chain, and ColabFold refolds each.
+
+      rosetta_link_scripts \
+          -parser:protocol examples/sequence_redesign.xml \
+          -s examples/input_data/redesign_target.pdb \
+          -out:path output/redesign
+
+  No RFdiffusion: the backbone is the one that came in. chains_to_design
+  restricts LigandMPNN to chain A, the 64 residue binder, leaving chain B
+  untouched. 4 sequences in one invocation.
+
+  A structure read from a pdb carries no reslabels, so AddResidueLabel stamps
+  the two the metrics select on before anything else runs. LigandMPNN carries
+  them onto every design and ColabFold onto every prediction.
+
+  scRMSD_redesigned superimposes on the redesigned chain and reports whether
+  the new sequence folds to the backbone it was designed for;
+  scRMSD_redesigned_on_target superimposes on the held chain instead and
+  reports whether it also stays in place against it.
+
+  Filters are left out on purpose. A filter in the PROTOCOLS list runs on the
+  primary pose only, so its column would be blank for every design but the
+  first. To score each one, wrap the filters in a MultiplePoseMover with a
+  nested ROSETTASCRIPTS; examples/general_example_with_per_pose_scoring.xml shows that. The
+  predictor metrics above need no wrapper: ColabFold attaches them to every
+  pose it produces.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <Chain name="chain_a" chains="A" />
+        <Chain name="chain_b" chains="B" />
+        <ResiduePDBInfoHasLabel name="redesigned" property="redesigned" />
+        <ResiduePDBInfoHasLabel name="target" property="target" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <AddResidueLabel name="label_redesigned" residue_selector="chain_a" label="redesigned" />
+        <AddResidueLabel name="label_target" residue_selector="chain_b" label="target" />
+
+        <LigandMPNN name="design_sequence"
+            batch_size="4"
+            chains_to_design="A"
+            prefix_name="mpnn_"
+            work_dir="01_ligandmpnn" />
+
+        <ColabFold name="predict_structure"
+            models="1,2"
+            msa_mode="single_sequence"
+            prefix_name="AF2_"
+            replace_pose="true"
+            work_dir="02_colabfold">
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_redesigned" calculation_selector="redesigned" />
+            <RMSD name="scRMSD_redesigned_on_target"
+                  calculation_selector="redesigned" alignment_selector="target" />
+            <metric name="plddt_all" base_metric="pLDDT" />
+            <metric name="plddt_redesigned" base_metric="pLDDT" selector="redesigned" />
+            <metric name="pAE_redesigned" base_metric="pAE" selector="redesigned" />
+        </ColabFold>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="label_redesigned" />
+        <Add mover="label_target" />
+        <Add mover="design_sequence" />
+        <Add mover="predict_structure" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

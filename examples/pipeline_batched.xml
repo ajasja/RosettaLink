@@ -1,0 +1,78 @@
+<!--
+  Binder design, every stage batched.
+
+      rosetta_link_scripts \
+          -parser:protocol examples/pipeline_batched.xml \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/pipeline
+
+  Each mover takes every pose the previous one published and hands its own
+  results on, so LigandMPNN and ColabFold each run once for the whole
+  fan out instead of once per pose:
+
+      make_backbone      1 target       to  N backbones
+      make_sequence      N backbones    to  N*M sequences    (one invocation)
+      predict_structure  N*M sequences  to  N*M predictions  (one invocation)
+
+  run_command is set on no tag, so each comes from the matching section of
+  rosettalink.config.yaml.
+
+  The filters run inside FOR_EACH_POSE, so every design gets a column rather
+  than only the first. That needs a PyRosetta build carrying
+  RosettaCommons/rosetta pull request 494.
+
+  Each stage keeps its work_dir, relative to -out:path, so the raw output of
+  each tool lands beside the designs.
+-->
+<ROSETTASCRIPTS>
+
+    <SCOREFXNS>
+        <ScoreFunction name="sfxn" weights="ref2015" />
+    </SCOREFXNS>
+
+    <RESIDUE_SELECTORS>
+        <True name="full_pose" />
+        <ResiduePDBInfoHasLabel name="new_backbone" property="new_backbone" />
+        <ResiduePDBInfoHasLabel name="fixed" property="fixed" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <RFdiffusion name="make_backbone"
+            contig="[B1-150/0 90-120]"
+            num_designs="2"
+            work_dir="01_rfdiffusion" />
+
+        <LigandMPNN name="make_sequence"
+            batch_size="2"
+            fixed_selector="fixed"
+            work_dir="02_ligandmpnn" />
+
+        <ColabFold name="predict_structure"
+            models="1,2"
+            msa_mode="single_sequence"
+            prefix_name="AF2_"
+            work_dir="03_colabfold">
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_new_backbone" calculation_selector="new_backbone" />
+            <RMSD name="scRMSD_binder_on_target" calculation_selector="new_backbone" alignment_selector="fixed" />
+        </ColabFold>
+    </MOVERS>
+
+    <FILTERS>
+        <NetCharge name="netcharge" confidence="0" />
+        <LongestContinuousApolarSegment name="apolar_segment"
+            residue_selector="full_pose"
+            confidence="0" />
+    </FILTERS>
+
+    <PROTOCOLS>
+        <Add mover="make_backbone" />
+        <Add mover="make_sequence" />
+        <Add mover="predict_structure" />
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add filter="netcharge" />
+            <Add filter="apolar_segment" />
+        </PROTOCOLS></FOR_EACH_POSE>
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

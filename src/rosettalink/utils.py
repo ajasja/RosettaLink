@@ -1,13 +1,14 @@
 import os
 import re
 import shutil
-
-import pyrosetta
-from pyrosetta.rosetta.basic import Tracer, TracerPriority
-
 import tempfile
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
+
+# pyrosetta is imported inside the functions that need it, so this module can
+# be imported - and its configuration, pose-buffer, work_dir and fasta helpers
+# tested - in an environment without PyRosetta.
+
 
 def run_and_log(command, tracer_info, tracer_error):
     """Runs a command using os.system and also logs the command before running using print"""
@@ -23,6 +24,8 @@ def run_and_log(command, tracer_info, tracer_error):
         raise Exception(f" Command exited with exit code {exitCode}\n\n{dodatek}")
 
 def setup_tracer(mover_name):
+    from pyrosetta.rosetta.basic import Tracer, TracerPriority
+
     new_tracer_fatal = Tracer(mover_name, TracerPriority.t_fatal)
     new_tracer_error = Tracer(mover_name, TracerPriority.t_error)
     new_tracer_warning = Tracer(mover_name, TracerPriority.t_warning)
@@ -31,6 +34,97 @@ def setup_tracer(mover_name):
     new_tracer_trace = Tracer(mover_name, TracerPriority.t_trace)
     return new_tracer_fatal, new_tracer_error, new_tracer_warning, new_tracer_info, new_tracer_debug, new_tracer_trace
 
+
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
+
+# Name of the configuration file looked for when no path is given.
+CONFIG_FILENAME = "rosettalink.config.yaml"
+
+# Contents of the loaded configuration file. One key per mover name, each
+# holding that mover's settings:
+#
+#   RFdiffusion:
+#     run_command: singularity run --nv /path/to/rfdiffusion.sif
+#   ColabFold:
+#     run_command: colabfold_batch
+#
+# Populated by load_configuration(), which rosettalink.init() calls. Mutated
+# in place, so `from rosettalink.utils import configuration` stays valid.
+configuration = {}
+
+
+def config_search_paths(config=None):
+    """Paths load_configuration() looks at, in order. With config given that
+    is the only path; otherwise the current directory is tried before
+    ~/.rosettalink/."""
+    if config:
+        return [Path(config)]
+    return [
+        Path.cwd() / CONFIG_FILENAME,
+        Path.home() / ".rosettalink" / CONFIG_FILENAME,
+    ]
+
+
+def load_configuration(config=None):
+    """Loads a configuration file into `configuration` and returns the path it
+    came from together with every path looked at, so a caller reporting that
+    none was found does not walk them a second time.
+
+    Raises FileNotFoundError when config names a file that does not exist, so
+    a mistyped path is reported rather than silently ignored."""
+    import yaml
+
+    paths = config_search_paths(config)
+    for path in paths:
+        if not path.is_file():
+            continue
+        with open(path) as handle:
+            loaded = yaml.safe_load(handle) or {}
+        if not isinstance(loaded, dict):
+            raise RuntimeError(
+                f"{path} must hold a mapping of mover name to settings, got {type(loaded).__name__}"
+            )
+        configuration.clear()
+        configuration.update(loaded)
+        return str(path), paths
+
+    if config:
+        raise FileNotFoundError(f"Configuration file not found: {config}")
+    configuration.clear()
+    return None, paths
+
+
+def mover_configuration(mover_name):
+    """Settings of one mover from the loaded configuration, as a dict. Empty
+    when the file has no section for it."""
+    section = configuration.get(mover_name)
+    return section if isinstance(section, dict) else {}
+
+
+def get_run_command(mover_name, run_command=""):
+    """The command prefix that reaches the external program of mover_name.
+
+    The value given on the tag wins; otherwise it comes from the run_command
+    key of that mover's section in the configuration file. Raises naming both
+    when neither is set."""
+    if run_command:
+        return run_command
+
+    from_config = mover_configuration(mover_name).get("run_command", "")
+    if from_config:
+        return from_config
+
+    searched = ", ".join(str(path) for path in config_search_paths())
+    raise RuntimeError(
+        f"No run_command for {mover_name}. Either set run_command on the tag:\n"
+        f'    <{mover_name} name="..." run_command="..." />\n'
+        f"or add a section to {CONFIG_FILENAME}:\n"
+        f"    {mover_name}:\n"
+        f"      run_command: ...\n"
+        f"Configuration searched: {searched}"
+    )
 
 
 def parse_fasta_records(fasta_path, chain_separator=":"):
@@ -82,6 +176,13 @@ def parse_fasta_records(fasta_path, chain_separator=":"):
     return records
 
 
+def pose_chain_sequences(pose):
+    """Sequences of the pose, one per chain, in pose order. Used to build the
+    input of a structure predictor, so that a complex is folded as a complex
+    rather than as one fused polypeptide."""
+    return [chain.sequence() for chain in pose.split_by_chain()]
+
+
 def drain_additional_output(mover):
     """Collects every pose a one-to-many mover produced beyond the one
     already sitting in the pose apply() was given.
@@ -118,6 +219,8 @@ def resolve_rmsd_atoms(atoms):
     Accepts the short names in RMSD_ATOM_SETS ("ca", "heavy", ...) or a
     core::scoring::rmsd_atoms name ("rmsd_protein_bb_ca", ...) directly. The
     chosen atom set governs the superposition as well as the measurement."""
+    import pyrosetta
+
     rmsd_atoms = pyrosetta.rosetta.core.scoring.rmsd_atoms
     requested = atoms.strip()
     enum_name = RMSD_ATOM_SETS.get(requested.lower(), requested)
@@ -129,10 +232,36 @@ def resolve_rmsd_atoms(atoms):
     return getattr(rmsd_atoms, enum_name)
 
 
+# Directory a relative work_dir is kept under. rosetta_link_scripts sets it
+# to the run's output directory; without it a relative work_dir lands in the
+# directory the run started from.
+output_root = None
+
+
+def set_output_root(path):
+    """Sets the directory relative work_dir attributes are kept under."""
+    global output_root
+    output_root = Path(path).absolute() if path else None
+
+
+def resolve_work_dir(work_dir_):
+    """Where a work_dir attribute ends up: as given when absolute, under
+    output_root when one is set, and relative to the current directory
+    otherwise."""
+    if not work_dir_:
+        return None
+    path = Path(work_dir_)
+    if path.is_absolute():
+        return path
+    if output_root is not None:
+        return output_root / path
+    return path.absolute()
+
+
 @contextmanager
 def work_dir(work_dir_=None, tracer_debug=None):
         original_cwd = os.getcwd()
-        work_dir_ = Path(work_dir_).resolve() if work_dir_ else None # To allow relative and absolute passing of work_dir
+        work_dir_ = resolve_work_dir(work_dir_)
         temp_dir = tempfile.TemporaryDirectory()
         run_dir = Path(temp_dir.name)
         if tracer_debug:
@@ -156,3 +285,110 @@ def work_dir(work_dir_=None, tracer_debug=None):
             except Exception:
                 #tracer_debug << f"Failed to clean up {run_dir} \n" and tracer_debug.flush()
                 pass
+
+
+# --------------------------------------------------------------------------- #
+# Alignments
+# --------------------------------------------------------------------------- #
+
+
+def read_a3m(text):
+    """Records of an a3m, as (query_sequence, [(header, sequence), ...]).
+
+    Accepts a file opening with a ColabFold "#<lengths>\t<counts>" cardinality
+    line and one starting at the query record. Sequences keep their lowercase
+    insertion characters.
+    """
+    records = []
+    header = None
+    parts = []
+    for line in text.splitlines():
+        line = line.rstrip()
+        if header is None and (not line.strip() or line.startswith("#")):
+            continue
+        if line.startswith(">"):
+            if header is not None:
+                records.append((header, "".join(parts)))
+            header = line
+            parts = []
+        elif header is not None:
+            parts.append(line.strip())
+    if header is not None:
+        records.append((header, "".join(parts)))
+    if not records:
+        raise ValueError("no sequences found in alignment")
+    return records[0][1], records[1:]
+
+
+def without_insertions(sequence):
+    """An a3m sequence with its lowercase insertion columns removed, which
+    leaves one character per column of the query."""
+    return "".join(character for character in sequence if not character.islower())
+
+
+def build_partial_a3m(chain_sequences, chain_alignments, chain_covered):
+    """An a3m for one complex, pairing each chain with the alignment covering
+    it and gapping every residue the alignments do not cover.
+
+    chain_sequences  one sequence per chain, in chain order
+    chain_alignments one a3m text per chain, or None for a chain folded from
+                     its sequence alone
+    chain_covered    per chain, the positions within that chain the alignment
+                     covers, 0 based and ascending; None means every position
+
+    Raises ValueError when an alignment's query length does not match the
+    number of positions it is said to cover, which otherwise silently shifts
+    every hit against the sequence.
+    """
+    lengths = [len(sequence) for sequence in chain_sequences]
+    total = sum(lengths)
+    offsets = []
+    running = 0
+    for length in lengths:
+        offsets.append(running)
+        running += length
+
+    lines = [
+        "#" + ",".join(str(length) for length in lengths)
+        + "\t" + ",".join("1" for _ in lengths),
+        ">" + "\t".join(chain_letter(index) for index in range(len(chain_sequences))),
+        "".join(chain_sequences),
+    ]
+
+    # Each chain on its own, gapped outside its span, which is what makes
+    # colabfold treat the record as a complex rather than one long chain.
+    for index, sequence in enumerate(chain_sequences):
+        before = "-" * offsets[index]
+        after = "-" * (total - offsets[index] - lengths[index])
+        lines.append(">" + chain_letter(index))
+        lines.append(before + sequence + after)
+
+    for index, alignment in enumerate(chain_alignments):
+        if not alignment:
+            continue
+        covered = chain_covered[index]
+        if covered is None:
+            covered = list(range(lengths[index]))
+        query, hits = read_a3m(alignment)
+        query = without_insertions(query)
+        if len(query) != len(covered):
+            raise ValueError(
+                f"the alignment for chain {chain_letter(index)} has {len(query)} "
+                f"query columns but covers {len(covered)} residues of that chain"
+            )
+        positions = [offsets[index] + position for position in covered]
+        for header, hit in hits:
+            hit = without_insertions(hit)
+            row = ["-"] * total
+            for column, position in enumerate(positions):
+                if column < len(hit):
+                    row[position] = hit[column]
+            lines.append(header)
+            lines.append("".join(row))
+
+    return "\n".join(lines) + "\n"
+
+
+def chain_letter(index):
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    return letters[index % len(letters)]
