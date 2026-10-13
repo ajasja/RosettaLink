@@ -21,9 +21,10 @@ def write_config(directory, text):
 def test_explicit_path_is_loaded(tmp_path):
 	path = write_config(tmp_path, "ColabFold:\n  run_command: colabfold_batch\n")
 
-	loaded_from = utils.load_configuration(str(path))
+	loaded_from, searched = utils.load_configuration(str(path))
 
 	assert loaded_from == str(path)
+	assert searched == [path]
 	assert utils.configuration["ColabFold"]["run_command"] == "colabfold_batch"
 
 
@@ -69,7 +70,11 @@ def test_no_configuration_anywhere_leaves_it_empty(tmp_path, monkeypatch):
 	monkeypatch.setattr(utils.Path, "home", classmethod(lambda cls: tmp_path / "home"))
 	monkeypatch.chdir(tmp_path)
 
-	assert utils.load_configuration() is None
+	loaded_from, searched = utils.load_configuration()
+
+	assert loaded_from is None
+	# Reported as the places looked at, so a caller does not walk them again.
+	assert len(searched) == 2
 	assert utils.configuration == {}
 
 

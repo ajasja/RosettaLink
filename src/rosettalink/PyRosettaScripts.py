@@ -35,13 +35,13 @@ class PyRosettaScripts:
 
     @staticmethod
     def _load_configuration(config):
-        from .utils import CONFIG_FILENAME, config_search_paths, load_configuration
+        from .utils import CONFIG_FILENAME, load_configuration
 
-        loaded_from = load_configuration(config)
+        loaded_from, paths = load_configuration(config)
         if loaded_from:
             print(f"Loaded RosettaLink configuration from {loaded_from}")
         else:
-            searched = ", ".join(str(path) for path in config_search_paths())
+            searched = ", ".join(str(path) for path in paths)
             print(
                 f"No {CONFIG_FILENAME} found ({searched}); "
                 f"every mover needs run_command set on its tag"

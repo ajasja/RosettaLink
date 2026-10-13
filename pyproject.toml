@@ -28,6 +28,19 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tool.pixi.dependencies]
+python = "3.10.*"
+
+[tool.pixi.pypi-dependencies]
+rosettalink = { path = ".", editable = true }
+pyrosetta = { path = "./.wheels/pyrosetta-0.0.dev0-cp310-cp310-linux_x86_64.whl" }
+
+[tool.pixi.tasks]
+
 [tool.pytest.ini_options]
 # Integration tests need PyRosetta and a recorded fixture, so a bare pytest
 # runs the unit tests only. Run them with: pytest tests/integration

@@ -69,7 +69,8 @@ def config_search_paths(config=None):
 
 def load_configuration(config=None):
     """Loads a configuration file into `configuration` and returns the path it
-    came from, or None when no file was found.
+    came from together with every path looked at, so a caller reporting that
+    none was found does not walk them a second time.
 
     Raises FileNotFoundError when config names a file that does not exist, so
     a mistyped path is reported rather than silently ignored."""
@@ -87,12 +88,12 @@ def load_configuration(config=None):
             )
         configuration.clear()
         configuration.update(loaded)
-        return str(path)
+        return str(path), paths
 
     if config:
         raise FileNotFoundError(f"Configuration file not found: {config}")
     configuration.clear()
-    return None
+    return None, paths
 
 
 def mover_configuration(mover_name):

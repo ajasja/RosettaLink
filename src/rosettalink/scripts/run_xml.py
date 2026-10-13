@@ -137,9 +137,12 @@ def write_scorefile(rows, path, scorefile_format):
     if scorefile_format == "none" or not rows:
         return None
     if scorefile_format == "json":
+        # One object per line, which is what rosetta_scripts writes for
+        # -out:file:scorefile_format json, so the same readers take both.
         path = path.with_suffix(".json")
         with open(path, "w") as handle:
-            json.dump(rows, handle, indent=2)
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
         return path
 
     path = path.with_suffix(".csv")

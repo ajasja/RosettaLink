@@ -107,12 +107,16 @@ def test_a_protocol_without_placeholders_needs_no_vars():
 	assert run_xml.fill_protocol(xml, {}) == xml
 
 
-def test_json_scorefile(tmp_path):
-	rows = [{"description": "a.pdb", "AF2_plddt": 90.1}]
+def test_json_scorefile_is_one_object_per_line(tmp_path):
+	# rosetta_scripts writes its json score file this way, so the same reader
+	# takes either, and a row can be appended without rewriting the file.
+	rows = [{"description": "a.pdb", "AF2_plddt": 90.1}, {"description": "b.pdb"}]
 
 	path = run_xml.write_scorefile(rows, tmp_path / "score", "json")
 
-	assert json.loads(path.read_text()) == rows
+	lines = path.read_text().splitlines()
+	assert len(lines) == len(rows)
+	assert [json.loads(line) for line in lines] == rows
 
 
 def test_csv_scorefile_columns_are_the_union_of_every_row(tmp_path):

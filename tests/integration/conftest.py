@@ -88,6 +88,12 @@ def run_protocol(tmp_path_factory):
 			else:
 				os.environ["ROSETTALINK_STUB_FIXTURE"] = previous_fixture
 
-		return output_dir, json.loads((output_dir / "score.json").read_text())
+		# One json object per line, as rosetta_scripts writes it.
+		rows = [
+			json.loads(line)
+			for line in (output_dir / "score.json").read_text().splitlines()
+			if line.strip()
+		]
+		return output_dir, rows
 
 	return run
