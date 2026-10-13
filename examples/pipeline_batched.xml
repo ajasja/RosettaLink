@@ -44,9 +44,9 @@
             msa_mode="single_sequence"
             prefix_name="AF2_"
             work_dir="{work_dir}/colabfold">
-            <RMSD name="scRMSD_all" calculation="all" />
-            <RMSD name="scRMSD_new_backbone" calculation="new_backbone" />
-            <RMSD name="scRMSD_binder_on_target" calculation="new_backbone" alignment="fixed" />
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_new_backbone" calculation_selector="new_backbone" />
+            <RMSD name="scRMSD_binder_on_target" calculation_selector="new_backbone" alignment_selector="fixed" />
         </ColabFold>
     </MOVERS>
 

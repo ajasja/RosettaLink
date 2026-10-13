@@ -40,9 +40,9 @@
             msa_mode="single_sequence"
             prefix_name="AF2_"
             replace_pose="true">
-            <RMSD name="scRMSD_all" calculation="rfd_all" />
-            <metric name="plddt_all" selector="rfd_all" />
-            <metric name="pAE_all" selector="rfd_all" />
+            <RMSD name="scRMSD_all" />
+            <metric name="plddt_all" base_metric="pLDDT" />
+            <metric name="pAE_all" base_metric="pAE" />
         </ColabFold>
     </MOVERS>
 

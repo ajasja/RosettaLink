@@ -40,6 +40,7 @@
         <Neighborhood name="near_rfd_new_backbone" selector="rfd_new_backbone" distance="10.0" />
         <Or name="redesign_these"
             selectors="rfd_new_backbone,rfd_hidden_sidechains,near_rfd_new_backbone" />
+        <ResiduePDBInfoHasLabel name="rfd_motif" property="rfd_motif" />
     </RESIDUE_SELECTORS>
 
     <SIMPLE_METRICS>
@@ -70,19 +71,19 @@
             replace_pose="true"
             work_dir="03_colabfold">
 
-            <RMSD name="scRMSD_all" calculation="rfd_all" />
-            <RMSD name="scRMSD_motif" calculation="rfd_motif" />
-            <RMSD name="scRMSD_new_backbone" calculation="rfd_new_backbone" />
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_motif" calculation_selector="rfd_motif" />
+            <RMSD name="scRMSD_new_backbone" calculation_selector="rfd_new_backbone" />
             <RMSD name="scRMSD_new_backbone_on_fixed"
-                  calculation="rfd_new_backbone" alignment="rfd_fixed" />
+                  calculation_selector="rfd_new_backbone" alignment_selector="rfd_fixed" />
 
-            <metric name="plddt_all" selector="rfd_all" />
-            <metric name="plddt_motif" selector="rfd_motif" />
-            <metric name="plddt_new_backbone" selector="rfd_new_backbone" />
+            <metric name="plddt_all" base_metric="pLDDT" />
+            <metric name="plddt_motif" base_metric="pLDDT" selector="rfd_motif" />
+            <metric name="plddt_new_backbone" base_metric="pLDDT" selector="rfd_new_backbone" />
 
-            <metric name="pAE_all" selector="rfd_all" />
-            <metric name="pAE_motif" selector="rfd_motif" />
-            <metric name="pAE_new_backbone" selector="rfd_new_backbone" />
+            <metric name="pAE_all" base_metric="pAE" />
+            <metric name="pAE_motif" base_metric="pAE" selector="rfd_motif" />
+            <metric name="pAE_new_backbone" base_metric="pAE" selector="rfd_new_backbone" />
         </ColabFold>
     </MOVERS>
 

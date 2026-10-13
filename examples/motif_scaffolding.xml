@@ -50,13 +50,13 @@
             msa_mode="single_sequence"
             prefix_name="AF2_"
             replace_pose="true">
-            <RMSD name="scRMSD_all" calculation="rfd_all" />
-            <RMSD name="scRMSD_motif" calculation="rfd_motif" />
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_motif" calculation_selector="rfd_motif" />
             <RMSD name="scRMSD_motif_on_scaffold"
-                  calculation="rfd_motif" alignment="rfd_new_backbone" />
-            <metric name="plddt_all" selector="rfd_all" />
-            <metric name="plddt_motif" selector="rfd_motif" />
-            <metric name="pAE_motif" selector="rfd_motif" />
+                  calculation_selector="rfd_motif" alignment_selector="rfd_new_backbone" />
+            <metric name="plddt_all" base_metric="pLDDT" />
+            <metric name="plddt_motif" base_metric="pLDDT" selector="rfd_motif" />
+            <metric name="pAE_motif" base_metric="pAE" selector="rfd_motif" />
         </ColabFold>
     </MOVERS>
 

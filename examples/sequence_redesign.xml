@@ -33,6 +33,8 @@
         <True name="full_pose" />
         <Chain name="chain_a" chains="A" />
         <Chain name="chain_b" chains="B" />
+        <ResiduePDBInfoHasLabel name="redesigned" property="redesigned" />
+        <ResiduePDBInfoHasLabel name="target" property="target" />
     </RESIDUE_SELECTORS>
 
     <MOVERS>
@@ -50,13 +52,13 @@
             msa_mode="single_sequence"
             prefix_name="AF2_"
             replace_pose="true">
-            <RMSD name="scRMSD_all" calculation="all" />
-            <RMSD name="scRMSD_redesigned" calculation="redesigned" />
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_redesigned" calculation_selector="redesigned" />
             <RMSD name="scRMSD_redesigned_on_target"
-                  calculation="redesigned" alignment="target" />
-            <metric name="plddt_all" selector="all" />
-            <metric name="plddt_redesigned" selector="redesigned" />
-            <metric name="pAE_redesigned" selector="redesigned" />
+                  calculation_selector="redesigned" alignment_selector="target" />
+            <metric name="plddt_all" base_metric="pLDDT" />
+            <metric name="plddt_redesigned" base_metric="pLDDT" selector="redesigned" />
+            <metric name="pAE_redesigned" base_metric="pAE" selector="redesigned" />
         </ColabFold>
     </MOVERS>
 

@@ -78,15 +78,15 @@
             replace_pose="true"
             work_dir="03_colabfold">
 
-            <RMSD name="scRMSD_all" calculation="rfd_all" />
-            <RMSD name="scRMSD_new_backbone" calculation="rfd_new_backbone" />
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_new_backbone" calculation_selector="rfd_new_backbone" />
             <RMSD name="scRMSD_new_backbone_on_fixed"
-                  calculation="rfd_new_backbone" alignment="rfd_fixed" />
+                  calculation_selector="rfd_new_backbone" alignment_selector="rfd_fixed" />
 
-            <metric name="plddt_all" selector="rfd_all" />
-            <metric name="plddt_new_backbone" selector="rfd_new_backbone" />
-            <metric name="pAE_all" selector="rfd_all" />
-            <metric name="pAE_new_backbone" selector="rfd_new_backbone" />
+            <metric name="plddt_all" base_metric="pLDDT" />
+            <metric name="plddt_new_backbone" base_metric="pLDDT" selector="rfd_new_backbone" />
+            <metric name="pAE_all" base_metric="pAE" />
+            <metric name="pAE_new_backbone" base_metric="pAE" selector="rfd_new_backbone" />
         </ColabFold>
     </MOVERS>
 
