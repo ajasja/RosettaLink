@@ -212,3 +212,46 @@ def test_every_short_name_maps_to_an_rmsd_atoms_enum_name():
 
 def test_ca_is_the_alpha_carbon_atom_set():
 	assert RMSD_ATOM_SETS["ca"] == "rmsd_protein_bb_ca"
+
+
+# --------------------------------------------------------------------------- #
+# work_dir resolution
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def no_output_root():
+	"""Leaves output_root as it was found, so one test cannot change where
+	another one's work_dir lands."""
+	import rosettalink.utils as utils
+
+	previous = utils.output_root
+	utils.set_output_root(None)
+	yield utils
+	utils.output_root = previous
+
+
+def test_a_relative_work_dir_lands_under_the_output_root(no_output_root, tmp_path):
+	no_output_root.set_output_root(tmp_path)
+
+	assert no_output_root.resolve_work_dir("01_rfdiff") == tmp_path / "01_rfdiff"
+
+
+def test_an_absolute_work_dir_is_left_alone(no_output_root, tmp_path):
+	no_output_root.set_output_root(tmp_path)
+	elsewhere = tmp_path.parent / "elsewhere"
+
+	assert no_output_root.resolve_work_dir(elsewhere) == elsewhere
+
+
+def test_without_an_output_root_a_relative_work_dir_follows_the_current_directory(
+	no_output_root, tmp_path, monkeypatch
+):
+	monkeypatch.chdir(tmp_path)
+
+	assert no_output_root.resolve_work_dir("01_rfdiff") == (tmp_path / "01_rfdiff").absolute()
+
+
+def test_no_work_dir_resolves_to_nothing(no_output_root):
+	assert no_output_root.resolve_work_dir(None) is None
+	assert no_output_root.resolve_work_dir("") is None

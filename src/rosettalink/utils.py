@@ -231,10 +231,36 @@ def resolve_rmsd_atoms(atoms):
     return getattr(rmsd_atoms, enum_name)
 
 
+# Directory a relative work_dir is kept under. rosetta_link_scripts sets it
+# to the run's output directory; without it a relative work_dir lands in the
+# directory the run started from.
+output_root = None
+
+
+def set_output_root(path):
+    """Sets the directory relative work_dir attributes are kept under."""
+    global output_root
+    output_root = Path(path).absolute() if path else None
+
+
+def resolve_work_dir(work_dir_):
+    """Where a work_dir attribute ends up: as given when absolute, under
+    output_root when one is set, and relative to the current directory
+    otherwise."""
+    if not work_dir_:
+        return None
+    path = Path(work_dir_)
+    if path.is_absolute():
+        return path
+    if output_root is not None:
+        return output_root / path
+    return path.absolute()
+
+
 @contextmanager
 def work_dir(work_dir_=None, tracer_debug=None):
         original_cwd = os.getcwd()
-        work_dir_ = Path(work_dir_).resolve() if work_dir_ else None # To allow relative and absolute passing of work_dir
+        work_dir_ = resolve_work_dir(work_dir_)
         temp_dir = tempfile.TemporaryDirectory()
         run_dir = Path(temp_dir.name)
         if tracer_debug:

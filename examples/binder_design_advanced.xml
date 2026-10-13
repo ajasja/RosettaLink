@@ -12,8 +12,9 @@
           -out:path output/binder_advanced
 
   Run it from the repository root: existing_msa_file is relative to the
-  directory the run starts in, and so are the work_dir of each stage, which
-  is where that stage's inputs and raw outputs are left behind.
+  directory the run starts in. The work_dir of each stage is relative to
+  -out:path instead, so every stage's inputs and raw output are left beside
+  the designs.
 
   The contig keeps target chain B whole, then starts a new chain of 90 to 120
   de novo residues. 2 backbones x 2 sequences = 4 designs, less whatever

@@ -172,6 +172,7 @@ def main(argv=None):
     import pyrosetta
     from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
     from rosettalink.utils import drain_additional_output
+    from rosettalink.utils import set_output_root
 
     protocol_path = Path(arguments.protocol)
     if not protocol_path.is_file():
@@ -180,6 +181,9 @@ def main(argv=None):
 
     output_dir = Path(arguments.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    # A work_dir written relative in a protocol is kept beside the output
+    # rather than wherever the run was started from.
+    set_output_root(output_dir)
 
     inputs = [Path(path) for path in arguments.input]
     for path in inputs:
