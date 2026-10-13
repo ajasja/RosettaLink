@@ -258,3 +258,110 @@ def work_dir(work_dir_=None, tracer_debug=None):
             except Exception:
                 #tracer_debug << f"Failed to clean up {run_dir} \n" and tracer_debug.flush()
                 pass
+
+
+# --------------------------------------------------------------------------- #
+# Alignments
+# --------------------------------------------------------------------------- #
+
+
+def read_a3m(text):
+    """Records of an a3m, as (query_sequence, [(header, sequence), ...]).
+
+    Accepts a file opening with a ColabFold "#<lengths>\t<counts>" cardinality
+    line and one starting at the query record. Sequences keep their lowercase
+    insertion characters.
+    """
+    records = []
+    header = None
+    parts = []
+    for line in text.splitlines():
+        line = line.rstrip()
+        if header is None and (not line.strip() or line.startswith("#")):
+            continue
+        if line.startswith(">"):
+            if header is not None:
+                records.append((header, "".join(parts)))
+            header = line
+            parts = []
+        elif header is not None:
+            parts.append(line.strip())
+    if header is not None:
+        records.append((header, "".join(parts)))
+    if not records:
+        raise ValueError("no sequences found in alignment")
+    return records[0][1], records[1:]
+
+
+def without_insertions(sequence):
+    """An a3m sequence with its lowercase insertion columns removed, which
+    leaves one character per column of the query."""
+    return "".join(character for character in sequence if not character.islower())
+
+
+def build_partial_a3m(chain_sequences, chain_alignments, chain_covered):
+    """An a3m for one complex, pairing each chain with the alignment covering
+    it and gapping every residue the alignments do not cover.
+
+    chain_sequences  one sequence per chain, in chain order
+    chain_alignments one a3m text per chain, or None for a chain folded from
+                     its sequence alone
+    chain_covered    per chain, the positions within that chain the alignment
+                     covers, 0 based and ascending; None means every position
+
+    Raises ValueError when an alignment's query length does not match the
+    number of positions it is said to cover, which otherwise silently shifts
+    every hit against the sequence.
+    """
+    lengths = [len(sequence) for sequence in chain_sequences]
+    total = sum(lengths)
+    offsets = []
+    running = 0
+    for length in lengths:
+        offsets.append(running)
+        running += length
+
+    lines = [
+        "#" + ",".join(str(length) for length in lengths)
+        + "\t" + ",".join("1" for _ in lengths),
+        ">" + "\t".join(_chain_letter(index) for index in range(len(chain_sequences))),
+        "".join(chain_sequences),
+    ]
+
+    # Each chain on its own, gapped outside its span, which is what makes
+    # colabfold treat the record as a complex rather than one long chain.
+    for index, sequence in enumerate(chain_sequences):
+        before = "-" * offsets[index]
+        after = "-" * (total - offsets[index] - lengths[index])
+        lines.append(">" + _chain_letter(index))
+        lines.append(before + sequence + after)
+
+    for index, alignment in enumerate(chain_alignments):
+        if not alignment:
+            continue
+        covered = chain_covered[index]
+        if covered is None:
+            covered = list(range(lengths[index]))
+        query, hits = read_a3m(alignment)
+        query = without_insertions(query)
+        if len(query) != len(covered):
+            raise ValueError(
+                f"the alignment for chain {_chain_letter(index)} has {len(query)} "
+                f"query columns but covers {len(covered)} residues of that chain"
+            )
+        positions = [offsets[index] + position for position in covered]
+        for header, hit in hits:
+            hit = without_insertions(hit)
+            row = ["-"] * total
+            for column, position in enumerate(positions):
+                if column < len(hit):
+                    row[position] = hit[column]
+            lines.append(header)
+            lines.append("".join(row))
+
+    return "\n".join(lines) + "\n"
+
+
+def _chain_letter(index):
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    return letters[index % len(letters)]
