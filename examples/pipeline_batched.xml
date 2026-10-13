@@ -36,7 +36,7 @@
 
         <LigandMPNN name="make_sequence"
             batch_size="{num_sequences}"
-            fixed_reslabel="fixed"
+            fixed_selector="fixed"
             work_dir="{work_dir}/ligandmpnn" />
 
         <ColabFold name="predict_structure"

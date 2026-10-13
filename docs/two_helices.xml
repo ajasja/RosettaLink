@@ -58,7 +58,7 @@
 
         <LigandMPNN name="design_sequence"
             batch_size="{num_sequences}"
-            residues_to_design="redesign_these"
+            design_selector="redesign_these"
             prefix_name="mpnn_"
             work_dir="02_LigandMPNN" />
 

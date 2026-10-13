@@ -33,7 +33,7 @@
 
         <LigandMPNN name="design_sequence"
             batch_size="{num_sequences}"
-            residues_to_design="rfd_new_backbone"
+            design_selector="rfd_new_backbone"
             prefix_name="mpnn_"
             work_dir="{work_dir}/02_LigandMPNN" />
     </MOVERS>
