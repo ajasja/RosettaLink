@@ -214,8 +214,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             output_dir = Path(".")
             predicted_poses = []
             for index, (record_id, _) in enumerate(records):
-                input_pose = input_poses[index] if input_poses else None
-                resnums = folded_residues[index] if folded_residues else None
+                input_pose, _, resnums = per_record[index] if per_record else (None, None, None)
                 predicted_poses.append(
                     self._load_and_label_prediction(output_dir, record_id, input_pose, resnums)
                 )
