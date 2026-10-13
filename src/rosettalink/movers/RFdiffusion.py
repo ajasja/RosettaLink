@@ -102,6 +102,20 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
             # shared buffer instead, for the next RosettaLink mover to pick up.
             self.additional_poses_ = list(designed_poses[1:])
 
+    def _input_pdb_argument(self, input_pose):
+        """Points RFdiffusion at the structure apply() dumped into the run
+        directory.
+
+        Empty when extra_args names inference.input_pdb, so that one stands
+        alone rather than as a second override of the same key, and empty for
+        a pose with no residues, which is how a contig naming only de novo
+        residues is run."""
+        if self.extra_args_ and "inference.input_pdb" in self.extra_args_:
+            return ""
+        if input_pose.total_residue() == 0:
+            return ""
+        return "inference.input_pdb=input.pdb"
+
     def _run_one(self, input_pose, design_dir, run_command):
         """Runs RFdiffusion once over one input structure and returns every
         design it wrote, loaded and labelled.
@@ -123,6 +137,7 @@ class RFdiffusion(BaseLinkMover.BaseLinkMover):
                 inference.output_prefix=output/ \
                 'contigmap.contigs={self.contig_}' \
                 inference.num_designs={self.num_designs_} \
+                {self._input_pdb_argument(input_pose)} \
                 {self.extra_args_ if self.extra_args_ else ''} \
                 -cd output"   # IMPORTANT: Needs to be outside container (without leading slash)
 

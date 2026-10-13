@@ -38,8 +38,7 @@
         <RFdiffusion name="design_scaffold"
             contig="[10-40/A163-181/10-40]"
             num_designs="2"
-            prefix_name="rfd_"
-            extra_args="inference.input_pdb=input.pdb" />
+            prefix_name="rfd_" />
 
         <LigandMPNN name="design_sequence"
             batch_size="2"
