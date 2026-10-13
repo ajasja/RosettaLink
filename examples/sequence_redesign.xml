@@ -43,13 +43,15 @@
         <LigandMPNN name="design_sequence"
             batch_size="4"
             chains_to_design="A"
-            prefix_name="mpnn_" />
+            prefix_name="mpnn_"
+            work_dir="01_ligandmpnn" />
 
         <ColabFold name="predict_structure"
             models="1,2"
             msa_mode="single_sequence"
             prefix_name="AF2_"
-            replace_pose="true">
+            replace_pose="true"
+            work_dir="02_colabfold">
             <RMSD name="scRMSD_all" />
             <RMSD name="scRMSD_redesigned" calculation_selector="redesigned" />
             <RMSD name="scRMSD_redesigned_on_target"

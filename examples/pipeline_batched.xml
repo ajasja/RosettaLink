@@ -1,5 +1,10 @@
 <!--
-  Binder design, every stage batched. See examples/README.md to run it.
+  Binder design, every stage batched.
+
+      rosetta_link_scripts \
+          -parser:protocol examples/pipeline_batched.xml \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/pipeline
 
   Each mover takes every pose the previous one published and hands its own
   results on, so LigandMPNN and ColabFold each run once for the whole
@@ -12,9 +17,12 @@
   run_command is set on no tag, so each comes from the matching section of
   rosettalink.config.yaml.
 
-  The filters run on the primary pose only. To evaluate every design, wrap
-  them in FOR_EACH_POSE, which needs a Rosetta build carrying
+  The filters run inside FOR_EACH_POSE, so every design gets a column rather
+  than only the first. That needs a PyRosetta build carrying
   RosettaCommons/rosetta pull request 494.
+
+  Each stage keeps its work_dir, relative to -out:path, so the raw output of
+  each tool lands beside the designs.
 -->
 <ROSETTASCRIPTS>
 
@@ -30,20 +38,20 @@
 
     <MOVERS>
         <RFdiffusion name="make_backbone"
-            contig="{contig}"
-            num_designs="{num_backbones}"
-            work_dir="{work_dir}/rfdiffusion" />
+            contig="[B1-150/0 90-120]"
+            num_designs="2"
+            work_dir="01_rfdiffusion" />
 
         <LigandMPNN name="make_sequence"
-            batch_size="{num_sequences}"
+            batch_size="2"
             fixed_selector="fixed"
-            work_dir="{work_dir}/ligandmpnn" />
+            work_dir="02_ligandmpnn" />
 
         <ColabFold name="predict_structure"
             models="1,2"
             msa_mode="single_sequence"
             prefix_name="AF2_"
-            work_dir="{work_dir}/colabfold">
+            work_dir="03_colabfold">
             <RMSD name="scRMSD_all" />
             <RMSD name="scRMSD_new_backbone" calculation_selector="new_backbone" />
             <RMSD name="scRMSD_binder_on_target" calculation_selector="new_backbone" alignment_selector="fixed" />
@@ -61,8 +69,10 @@
         <Add mover="make_backbone" />
         <Add mover="make_sequence" />
         <Add mover="predict_structure" />
-        <Add filter="netcharge" />
-        <Add filter="apolar_segment" />
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add filter="netcharge" />
+            <Add filter="apolar_segment" />
+        </PROTOCOLS></FOR_EACH_POSE>
     </PROTOCOLS>
 
 </ROSETTASCRIPTS>

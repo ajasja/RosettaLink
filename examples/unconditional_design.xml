@@ -29,17 +29,20 @@
         <RFdiffusion name="design_backbone"
             contig="[100-100]"
             num_designs="2"
-            prefix_name="rfd_" />
+            prefix_name="rfd_"
+            work_dir="01_rfdiff" />
 
         <LigandMPNN name="design_sequence"
             batch_size="2"
-            prefix_name="mpnn_" />
+            prefix_name="mpnn_"
+            work_dir="02_ligandmpnn" />
 
         <ColabFold name="predict_structure"
             models="1,2"
             msa_mode="single_sequence"
             prefix_name="AF2_"
-            replace_pose="true">
+            replace_pose="true"
+            work_dir="03_colabfold">
             <RMSD name="scRMSD_all" />
             <metric name="plddt_all" base_metric="pLDDT" />
             <metric name="pAE_all" base_metric="pAE" />

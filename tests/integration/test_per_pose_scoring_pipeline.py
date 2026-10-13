@@ -18,7 +18,7 @@ import pytest
 
 INPUT = "examples/input_data/insulin_target.pdb"
 PROTOCOL = "examples/general_example_with_per_pose_scoring.xml"
-CONTIG = "[B1-150/0 90-120]"
+# What the protocol hardcodes: num_designs x batch_size.
 NUM_BACKBONES = 2
 NUM_SEQUENCES = 2
 NUM_DESIGNS = NUM_BACKBONES * NUM_SEQUENCES
@@ -49,11 +49,6 @@ def results(run_protocol, tmp_path_factory):
 		["rfdiffusion", "ligandmpnn", "colabfold"],
 		PROTOCOL,
 		[INPUT],
-		{
-			"contig": CONTIG,
-			"num_backbones": NUM_BACKBONES,
-			"num_sequences": NUM_SEQUENCES,
-		},
 	)
 
 
