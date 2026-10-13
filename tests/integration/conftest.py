@@ -56,6 +56,7 @@ def run_protocol(tmp_path_factory):
 		if missing:
 			pytest.skip(f"no recorded {fixture} fixture for {missing}")
 
+		import rosettalink.utils as utils
 		from rosettalink.scripts.run_xml import main
 
 		tmp_path = tmp_path_factory.mktemp(fixture)
@@ -77,12 +78,16 @@ def run_protocol(tmp_path_factory):
 
 		previous_dir = os.getcwd()
 		previous_fixture = os.environ.get("ROSETTALINK_STUB_FIXTURE")
+		# main() points utils.output_root at its output directory and leaves
+		# it set.
+		previous_output_root = utils.output_root
 		os.environ["ROSETTALINK_STUB_FIXTURE"] = str(FIXTURES / fixture)
 		os.chdir(tmp_path)
 		try:
 			main(argv)
 		finally:
 			os.chdir(previous_dir)
+			utils.output_root = previous_output_root
 			if previous_fixture is None:
 				os.environ.pop("ROSETTALINK_STUB_FIXTURE", None)
 			else:

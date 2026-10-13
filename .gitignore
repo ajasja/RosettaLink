@@ -221,6 +221,6 @@ __marimo__/
 # Working notes, kept on disk only and never committed.
 CLAUDE.md
 
-# Locally built PyRosetta wheel and the files that build it.
+# Locally built PyRosetta wheels.
 *.whl
-pyrosetta_pr494_wheel/
+.wheels/
