@@ -6,13 +6,12 @@
       rosetta_link_scripts \
           -parser:protocol examples/redesign_colabfold.xml \
           -s examples/input_data/insulin_target.pdb \
-          -out:path output/redesign \
-          -var num_sequences=2 \
-          -var work_dir=output/redesign
+          -out:path output/redesign
 
   Each stage receives every design of the stage before it, so ColabFold folds
-  all of them in a single invocation instead of one per sequence. The
-  protocol produces num_sequences output structures.
+  all of them in a single invocation instead of one per sequence. batch_size
+  sets how many sequences are designed, so this protocol produces two output
+  structures. Each stage keeps its work_dir, relative to -out:path.
 
   from_input is stamped before anything runs, so it tracks whether a reslabel
   survives being written to disk and read back by both tools.
@@ -32,15 +31,15 @@
             residue_selector="full_pose" label="from_input" />
 
         <LigandMPNN name="make_sequence"
-            batch_size="{num_sequences}"
-            work_dir="{work_dir}/ligandmpnn" />
+            batch_size="2"
+            work_dir="01_ligandmpnn" />
 
         <ColabFold name="predict_structure"
             models="1"
             msa_mode="single_sequence"
             prefix_name="AF2_"
             replace_pose="1"
-            work_dir="{work_dir}/colabfold">
+            work_dir="02_colabfold">
             <RMSD name="scRMSD_all" />
         </ColabFold>
     </MOVERS>
@@ -53,7 +52,9 @@
         <Add mover="label_input" />
         <Add mover="make_sequence" />
         <Add mover="predict_structure" />
-        <Add filter="netcharge" />
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add filter="netcharge" />
+        </PROTOCOLS></FOR_EACH_POSE>
     </PROTOCOLS>
 
 </ROSETTASCRIPTS>

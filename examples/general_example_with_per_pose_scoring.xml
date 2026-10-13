@@ -6,14 +6,11 @@
       rosetta_link_scripts \
           -parser:protocol examples/general_example_with_per_pose_scoring.xml \
           -s examples/input_data/insulin_target.pdb \
-          -out:path output/per_pose \
-          -var contig=[B1-150/0 90-120] \
-          -var num_backbones=2 \
-          -var num_sequences=3
+          -out:path output/per_pose
 
-  Unlike the other examples this one takes -var, so the contig and the two
-  counts are set on the command line. num_backbones x num_sequences
-  structures come out: 2 x 3 = 6 above.
+  num_designs x batch_size structures come out: 2 x 2 = 4 here. Any value in
+  a protocol can be written as a name in curly braces and supplied with -var instead
+  of being hardcoded, which is how the same file serves several runs.
 
   A filter in the outer PROTOCOLS list runs on the primary pose only, so its
   column would be blank for every design but the first. Wrapping the scoring
@@ -48,13 +45,13 @@
 
     <MOVERS>
         <RFdiffusion name="design_backbone"
-            contig="{contig}"
-            num_designs="{num_backbones}"
+            contig="[B1-150/0 90-120]"
+            num_designs="2"
             prefix_name="rfd_"
             work_dir="01_rfdiff" />
 
         <LigandMPNN name="design_sequence"
-            batch_size="{num_sequences}"
+            batch_size="2"
             design_selector="redesign_these"
             prefix_name="mpnn_"
             work_dir="02_LigandMPNN" />

@@ -26,11 +26,13 @@
             contig="[B1-150/0 90-120]"
             num_designs="2"
             prefix_name="rfd_"
+            work_dir="01_rfdiff"
          />
 
         <LigandMPNN name="design_sequence"
             design_selector="rfd_new_backbone" 
-            prefix_name="mpnn_" />
+            prefix_name="mpnn_"
+            work_dir="02_ligandmpnn" />
 
         <ColabFold name="predict_structure"
             models="1,2"
@@ -38,7 +40,8 @@
             existing_msa_selector="rfd_fixed"
             existing_msa_file=",examples/input_data/Insulin_Alignment/insulin_target_Chain_B.a3m"
             prefix_name="AF2_"
-            replace_pose="true">
+            replace_pose="true"
+            work_dir="03_colabfold">
             #all should be default selector if nothing is specified
             <RMSD name="scRMSD"  />
             <RMSD name="scRMSD_binder" calculation_selector="rfd_new_backbone" />

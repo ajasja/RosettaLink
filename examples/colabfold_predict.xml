@@ -5,8 +5,7 @@
       rosetta_link_scripts \
           -parser:protocol examples/colabfold_predict.xml \
           -s examples/input_data/insulin_target.pdb \
-          -out:path output/colabfold_predict \
-          -var work_dir=output/colabfold_predict/colabfold
+          -out:path output/colabfold_predict
 
   ColabFold reads its run_command from the ColabFold section of
   rosettalink.config.yaml. Set run_command on the tag to override it.
@@ -23,9 +22,6 @@
 -->
 <ROSETTASCRIPTS>
 
-    <RESIDUE_SELECTORS>
-    </RESIDUE_SELECTORS>
-
     <MOVERS>
 
         <ColabFold name="predict_structure"
@@ -33,7 +29,7 @@
             msa_mode="single_sequence"
             prefix_name="AF2_"
             replace_pose="1"
-            work_dir="{work_dir}">
+            work_dir="01_colabfold">
             <RMSD name="scRMSD_all" />
         </ColabFold>
     </MOVERS>
