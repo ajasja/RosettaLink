@@ -39,7 +39,8 @@ from pathlib import Path
 
 import numpy as np
 import pyrosetta
-from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabelSelector
+from pyrosetta.rosetta.core.select.residue_selector import TrueResidueSelector
+from pyrosetta.rosetta.core.select.residue_selector import get_residue_selector
 from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
@@ -65,7 +66,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         rank="auto",
         prefix_name="AF2_",
         run_command="",
-        cmd_header="",
         extra_args=None,
         work_dir=None,
     ):
@@ -84,7 +84,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         self.rank_ = rank
         self.prefix_name_ = prefix_name
         self.run_command_ = run_command
-        self.cmd_header_ = cmd_header
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
 
@@ -112,7 +111,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         copy.rank_ = self.rank_
         copy.prefix_name_ = self.prefix_name_
         copy.run_command_ = self.run_command_
-        copy.cmd_header_ = self.cmd_header_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
         copy.rmsd_metrics = self.rmsd_metrics.copy()
@@ -122,13 +120,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
 
     def resolve_run_command(self):
         """Command prefix reaching colabfold_batch: run_command, else the
-        deprecated cmd_header, else the ColabFold section of the
-        configuration file."""
-        if not self.run_command_ and self.cmd_header_:
-            self.tracer_warning << (
-                "cmd_header is deprecated, use run_command instead\n"
-            ) and self.tracer_warning.flush()
-            return self.cmd_header_
+        ColabFold section of the configuration file."""
         return get_run_command(self.mover_name(), self.run_command_)
 
     def apply(self, pose):
@@ -275,9 +267,9 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
 
     def _attach_confidence_metrics(self, pose, record_id, scores):
         """Computes every configured metric subtag: one confidence value
-        averaged over the residues carrying a reslabel.
+        averaged over the residues its selector picks.
 
-        A metric whose reslabel matches nothing is skipped and warned about,
+        A metric whose selector picks nothing is skipped and warned about,
         rather than reported as the mean of an empty selection."""
         for metric in self.confidence_metrics:
             quantity = metric["quantity"]
@@ -288,17 +280,17 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
                 ) and self.tracer_warning.flush()
                 continue
 
-            resnums = self._labelled_resnums(pose, metric["reslabel"], len(scores[quantity]))
+            resnums = self._selected_resnums(pose, metric["selector"], len(scores[quantity]))
             if not resnums:
                 self.tracer_warning << (
-                    f"Skipping metric {metric['name']}: no residue of {record_id} carries "
-                    f"the label {metric['reslabel']}\n"
+                    f"Skipping metric {metric['name']}: its selector picks no residue "
+                    f"of {record_id}\n"
                 ) and self.tracer_warning.flush()
                 continue
 
             if quantity == "pae":
                 # pae is a residue by residue matrix, so restricting it to a
-                # label means the block where both residues carry the label.
+                # selection means the block where both residues are selected.
                 values = [scores["pae"][i - 1][j - 1] for i in resnums for j in resnums]
             else:
                 values = [scores[quantity][resnum - 1] for resnum in resnums]
@@ -309,61 +301,57 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             self.tracer_info << f"\t{record_id} {score_name}: {value}\n" and self.tracer_info.flush()
 
     @staticmethod
-    def _labelled_resnums(pose, reslabel, limit):
-        """Residues carrying a reslabel, in pose numbering, up to the number
-        of residues the confidence values cover."""
-        pdb_info = pose.pdb_info()
-        if pdb_info is None:
-            return []
+    def _selected_resnums(pose, selector, limit):
+        """Residues a selector picks, in pose numbering, up to the number of
+        residues the confidence values cover. A selector of None is every
+        residue."""
+        if selector is None:
+            return list(range(1, min(pose.total_residue(), limit) + 1))
+        picked = selector.apply(pose)
         return [
             resnum
             for resnum in range(1, min(pose.total_residue(), limit) + 1)
-            if pdb_info.res_haslabel(resnum, reslabel)
+            if picked[resnum]
         ]
 
     def _attach_rmsd_metrics(self, pose, input_pose):
         """Computes every configured <RMSD> against the pose this prediction
         was folded from."""
         for rmsd in self.rmsd_metrics:
-            # reslabel_input selects on the pose the mover was handed,
-            # reslabel_prediction on the prediction.
-            residue_selector_input = ResiduePDBInfoHasLabelSelector(rmsd["reslabel_input"])
-            residue_selector_prediction = ResiduePDBInfoHasLabelSelector(rmsd["reslabel_prediction"])
+            # The same selector reads both poses: reslabels are carried over
+            # onto the prediction, and a selector left unset is every residue.
+            calculation = rmsd["calculation"] or TrueResidueSelector()
 
-            # reslabel_superimpose, when set, superimposes over a different
-            # set of residues than the RMSD is measured over - e.g. align on
-            # a fixed target chain and measure a designed binder, which
-            # reports placement rather than fold alone. Defaults to the
-            # measured residues.
-            superimpose_label = rmsd.get("reslabel_superimpose", "")
-            residue_selector_super = (
-                ResiduePDBInfoHasLabelSelector(superimpose_label) if superimpose_label else None
-            )
+            # alignment, when set, superimposes over a different set of
+            # residues than the RMSD is measured over - e.g. align on a fixed
+            # target chain and measure a designed binder, which reports
+            # placement rather than fold alone.
+            alignment = rmsd["alignment"]
 
-            # A label that matches no residue (e.g. motif on a design with no
-            # scaffolded motif) would otherwise be an RMSD over nothing.
-            # Skip it and leave the score unset rather than fail the run.
+            # A selector picking no residue (e.g. a motif label on a design
+            # with no scaffolded motif) would otherwise be an RMSD over
+            # nothing. Skip it and leave the score unset rather than fail.
             selections = [
-                (rmsd["reslabel_input"], residue_selector_input, input_pose),
-                (rmsd["reslabel_prediction"], residue_selector_prediction, pose),
+                ("calculation_selector", calculation, input_pose),
+                ("calculation_selector", calculation, pose),
             ]
-            if residue_selector_super is not None:
-                selections.append((superimpose_label, residue_selector_super, pose))
-            empty_labels = [
-                label for label, selector, target in selections if sum(selector.apply(target)) == 0
-            ]
-            if empty_labels:
+            if alignment is not None:
+                selections.append(("alignment_selector", alignment, pose))
+            empty = sorted(
+                {name for name, selector, target in selections if sum(selector.apply(target)) == 0}
+            )
+            if empty:
                 self.tracer_warning << (
-                    f"Skipping RMSD {rmsd['name']}: label(s) {empty_labels} select no residues\n"
+                    f"Skipping RMSD {rmsd['name']}: {empty} select no residues\n"
                 ) and self.tracer_warning.flush()
                 continue
 
             rmsd_metric = pyrosetta.rosetta.core.simple_metrics.metrics.RMSDMetric()
-            rmsd_metric.set_residue_selector(residue_selector_prediction)
-            rmsd_metric.set_residue_selector_reference(residue_selector_input)
+            rmsd_metric.set_residue_selector(calculation)
+            rmsd_metric.set_residue_selector_reference(calculation)
             rmsd_metric.set_comparison_pose(input_pose)
-            if residue_selector_super is not None:
-                rmsd_metric.set_residue_selector_super(residue_selector_super)
+            if alignment is not None:
+                rmsd_metric.set_residue_selector_super(alignment)
             # RMSDMetric does not align by default, which for a prediction in
             # its own reference frame measures the frame offset rather than
             # any structural difference.
@@ -391,7 +379,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         self.tracer_debug << f"Parsing my tag @ ColabFold...\n\tself: {self}\n\ttag: {tag}\n\tdata: {data}\n" and self.tracer_debug.flush()
 
         self.run_command_ = tag.get_option_string("run_command") if tag.hasOption("run_command") else ""
-        self.cmd_header_ = tag.get_option_string("cmd_header") if tag.hasOption("cmd_header") else ""
         self.fasta_ = tag.get_option_string("fasta") if tag.hasOption("fasta") else ""
         self.replace_pose_ = tag.get_option_bool("replace_pose") if tag.hasOption("replace_pose") else True
         self.models_ = tag.get_option_string("models") if tag.hasOption("models") else "1,2,3,4,5"
@@ -416,9 +403,9 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         # RMSD and confidence metrics
         for child in tag.getTags():
             if child.getName() == "RMSD":
-                self.rmsd_metrics.append(self._parse_rmsd_tag(child))
+                self.rmsd_metrics.append(self._parse_rmsd_tag(child, data))
             elif child.getName() == "metric":
-                self.confidence_metrics.append(self._parse_metric_tag(child))
+                self.confidence_metrics.append(self._parse_metric_tag(child, data))
         # Reject an unknown atoms= value here rather than after the
         # prediction has already run.
         for rmsd in self.rmsd_metrics:
@@ -426,73 +413,47 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         rmsd_names = [f"{rmsd['name']} (atoms={rmsd['atoms']})" for rmsd in self.rmsd_metrics]
         self.tracer_info << f"RMSD metrics found: {rmsd_names}\n" and self.tracer_info.flush()
         metric_names = [
-            f"{metric['name']} ({metric['quantity']} over {metric['reslabel']})"
+            f"{metric['name']} ({metric['quantity']})"
             for metric in self.confidence_metrics
         ]
         self.tracer_info << f"Confidence metrics found: {metric_names}\n" and self.tracer_info.flush()
 
-    def _parse_rmsd_tag(self, child):
+    def _parse_rmsd_tag(self, child, data):
         """One RMSD subtag.
 
-        calculation names the residues the RMSD is measured over and
-        alignment the residues it is superimposed on, both by reslabel.
-        alignment defaults to the measured residues."""
-        if child.hasOption("calculation"):
-            measured = child.get_option_string("calculation")
-            superimpose = (
-                child.get_option_string("alignment") if child.hasOption("alignment") else ""
-            )
-            reslabel_input = reslabel_prediction = measured
-        else:
-            self.tracer_warning << (
-                "reslabel_input and reslabel_prediction are deprecated, "
-                "use calculation and alignment instead\n"
-            ) and self.tracer_warning.flush()
-            reslabel_input = child.get_option_string("reslabel_input")
-            reslabel_prediction = (
-                child.get_option_string("reslabel_prediction")
-                if child.hasOption("reslabel_prediction") else reslabel_input
-            )
-            superimpose = (
-                child.get_option_string("reslabel_superimpose")
-                if child.hasOption("reslabel_superimpose") else ""
-            )
-
-        if not reslabel_input:
-            raise RuntimeError(
-                f"RMSD {child.get_option_string('name')} needs calculation set to a reslabel"
-            )
-
+        calculation_selector names the residues the RMSD is measured over and
+        alignment_selector the residues the structures are superimposed on.
+        Both name a residue selector and both default to every residue, so an
+        RMSD subtag with neither measures the whole prediction."""
         return {
             "name": child.get_option_string("name"),
-            "reslabel_input": reslabel_input,
-            "reslabel_prediction": reslabel_prediction,
-            "reslabel_superimpose": superimpose,
+            "calculation": self._selector_option(child, "calculation_selector", data),
+            "alignment": self._selector_option(child, "alignment_selector", data),
             "atoms": child.get_option_string("atoms") if child.hasOption("atoms") else "ca",
         }
 
     @staticmethod
-    def _parse_metric_tag(child):
-        """One metric subtag: a confidence value averaged over the residues
-        carrying a reslabel, reported under name.
+    def _selector_option(tag, option, data):
+        """The residue selector an attribute names, or None when unset, which
+        every caller reads as every residue."""
+        if not tag.hasOption(option):
+            return None
+        return get_residue_selector(tag.get_option_string(option), data)
 
-        Which value is taken from the name, so plddt_motif averages pLDDT and
-        pAE_motif averages PAE."""
-        name = child.get_option_string("name")
-        lowered = name.lower()
-        if lowered.startswith("plddt"):
-            quantity = "plddt"
-        elif lowered.startswith("pae"):
-            quantity = "pae"
-        else:
+    def _parse_metric_tag(self, child, data):
+        """One metric subtag: base_metric names the per residue confidence
+        value and selector the residues it is averaged over, defaulting to
+        every residue."""
+        base_metric = child.get_option_string("base_metric").lower()
+        if base_metric not in ("plddt", "pae"):
             raise RuntimeError(
-                f"metric {name} must start with plddt or pAE, which is what names the "
-                f"confidence value it reports"
+                f"metric {child.get_option_string('name')} has base_metric="
+                f"{child.get_option_string('base_metric')}, which is neither pLDDT nor pAE"
             )
         return {
-            "name": name,
-            "quantity": quantity,
-            "reslabel": child.get_option_string("selector"),
+            "name": child.get_option_string("name"),
+            "quantity": base_metric,
+            "selector": self._selector_option(child, "selector", data),
         }
 
     @staticmethod
@@ -510,11 +471,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             "run_command",
             XMLSchemaType(xs_string),
             "Command prefix reaching colabfold_batch, whether it is a binary on PATH (colabfold_batch), a container (singularity run --nv /path/to/colabfold.sif colabfold_batch) or another environment (conda run -n ENVNAME colabfold_batch). Taken from the ColabFold section of rosettalink.config.yaml when not set here",
-            ""))
-        attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "cmd_header",
-            XMLSchemaType(xs_string),
-            "Deprecated name for run_command, kept so existing protocols keep working",
             ""))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "replace_pose",
@@ -568,41 +524,17 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         )
         rmsd_attrlist.append(
             XMLSchemaAttribute.attribute_w_default(
-                "calculation",
+                "calculation_selector",
                 XMLSchemaType(xs_string),
-                "Reslabel naming the residues the RMSD is measured over, on both the input pose and the prediction",
+                "Name of a residue selector naming the residues the RMSD is measured over, on both the prediction and the pose it was folded from. Every residue when not set",
                 ""
             )
         )
         rmsd_attrlist.append(
             XMLSchemaAttribute.attribute_w_default(
-                "alignment",
+                "alignment_selector",
                 XMLSchemaType(xs_string),
-                "Reslabel naming the residues the structures are superimposed on, when that should differ from the residues the RMSD is measured over. For example superimpose on a fixed target chain and measure a designed binder, which reports how well the binder is placed and not only how well it folds. Defaults to the measured residues.",
-                ""
-            )
-        )
-        rmsd_attrlist.append(
-            XMLSchemaAttribute.attribute_w_default(
-                "reslabel_input",
-                XMLSchemaType(xs_string),
-                "Deprecated, use calculation. Residue label in input over which RMSD is calculated",
-                ""
-            )
-        )
-        rmsd_attrlist.append(
-            XMLSchemaAttribute.attribute_w_default(
-                "reslabel_prediction",
-                XMLSchemaType(xs_string),
-                "Deprecated, use calculation. Residue label in prediction over which RMSD is calculated",
-                ""
-            )
-        )
-        rmsd_attrlist.append(
-            XMLSchemaAttribute.attribute_w_default(
-                "reslabel_superimpose",
-                XMLSchemaType(xs_string),
-                "Deprecated, use alignment. Residue label to superimpose over, when it should differ from the residues the RMSD is measured over.",
+                "Name of a residue selector naming the residues the structures are superimposed on, when that should differ from the residues the RMSD is measured over. For example superimpose on a fixed target chain and measure a designed binder, which reports how well the binder is placed and not only how well it folds. Defaults to the measured residues",
                 ""
             )
         )
@@ -625,20 +557,28 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             XMLSchemaAttribute.required_attribute(
                 "name",
                 XMLSchemaType(xs_string),
-                "Score key this metric is reported under, after prefix_name. It also names the confidence value reported: a name starting with plddt reports pLDDT and one starting with pAE reports PAE"
+                "Score key this metric is reported under, after prefix_name"
             )
         )
         metric_attrlist.append(
             XMLSchemaAttribute.required_attribute(
+                "base_metric",
+                XMLSchemaType(xs_string),
+                "Which per residue confidence value is averaged: pLDDT or pAE. pAE is a residue by residue matrix, so a selection averages the block where both residues are selected"
+            )
+        )
+        metric_attrlist.append(
+            XMLSchemaAttribute.attribute_w_default(
                 "selector",
                 XMLSchemaType(xs_string),
-                "Reslabel naming the residues the confidence value is averaged over"
+                "Name of a residue selector naming the residues the confidence value is averaged over. Every residue when not set",
+                ""
             )
         )
 
         subelements = pyrosetta.rosetta.utility.tag.XMLSchemaSimpleSubelementList()
-        subelements.add_simple_subelement("RMSD", rmsd_attrlist, "RMSD applied over specified residue label")
-        subelements.add_simple_subelement("metric", metric_attrlist, "Confidence value averaged over the residues carrying a reslabel")
+        subelements.add_simple_subelement("RMSD", rmsd_attrlist, "Self consistency RMSD between the prediction and the pose it was folded from")
+        subelements.add_simple_subelement("metric", metric_attrlist, "Confidence value averaged over the residues a selector picks")
         pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes_and_repeatable_subelements(
             xsd, cls.mover_name(), description, attrlist, subelements)
 
