@@ -17,6 +17,23 @@
 # external programs are reached through rosettalink.config.yaml, so this
 # environment needs only PyRosetta.
 #
+# A work_dir written relative in a protocol is kept under -out:path. The
+# slurm logs go to logs/ beside the submit directory instead, since sbatch
+# reads the --output lines above before this script runs and cannot see its
+# arguments. To keep them with the rest of a run, pass the paths to sbatch
+# itself, which overrides those lines, and make the directory first:
+#
+#   OUT=$HOME/runs/redesign
+#   mkdir -p $OUT/logs
+#   sbatch --output=$OUT/logs/slurm-%A_%x.out \
+#          --error=$OUT/logs/slurm-%A_%x.err \
+#       run_protocol.sh examples/redesign_colabfold.xml \
+#       -s examples/input_data/insulin_target.pdb -out:path $OUT
+#
+# Use an absolute path: a relative one resolves against the submit
+# directory, and slurm drops the job without a message when the directory
+# does not exist.
+#
 # CONDA_ENV picks the environment, PROXY_SETUP a script to source before the
 # run. A compute node has no route to the internet until something exports
 # proxy settings, which a protocol needs whenever it asks ColabFold for an
