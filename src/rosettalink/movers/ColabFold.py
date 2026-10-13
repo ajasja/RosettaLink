@@ -35,6 +35,7 @@
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -46,6 +47,7 @@ from pyrosetta.rosetta.core.pose import setPoseExtraScore
 from rosettalink.decorators import register_mover
 from rosettalink.utils import get_run_command
 from rosettalink.utils import build_partial_a3m
+from rosettalink.utils import chain_letter
 from rosettalink.utils import parse_fasta_records
 from rosettalink.utils import pose_chain_sequences
 from rosettalink.utils import resolve_rmsd_atoms
@@ -143,10 +145,10 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         # correspondence to any input pose. Otherwise they come from the
         # poses handed over by the step before, or just the one passed in.
         #
-        # Everything read from disk is read here, before work_dir() changes
-        # directory, so a path in the protocol stays relative to the protocol.
-        alignments = []
-        folded_residues = []
+        # Paths named in the protocol are resolved here, before work_dir()
+        # changes directory, so they stay relative to where the run started.
+        msa_sources = self._resolve_msa_files()
+        per_record = []
         if self.fasta_:
             records = parse_fasta_records(self.fasta_)
             input_poses = []
@@ -159,10 +161,8 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             for index, input_pose in enumerate(input_poses):
                 resnums = self._folded_residues(input_pose)
                 chains = self._chains_of(input_pose, resnums)
-                folded_residues.append(resnums)
+                per_record.append((input_pose, chains, resnums))
                 records.append((f"design_{index}", [sequence for _, sequence, _ in chains]))
-                if self.msa_mode_ == "partial":
-                    alignments.append(self._partial_a3m(input_pose, chains))
             self.tracer_info << (
                 f"Folding {len(records)} pose(s) in one invocation"
                 f"{self._subset_note()}\n"
@@ -173,17 +173,19 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             # handed to colabfold_batch stays relative to it.
             self.tracer_info << f"Current working directory: {os.getcwd()}\n" and self.tracer_info.flush()
 
-            if alignments:
+            if msa_sources and per_record:
                 # colabfold_batch takes a directory of a3m files and uses the
                 # alignment in each instead of querying the server.
+                staged = self._stage_alignments(msa_sources)
                 os.makedirs("msas", exist_ok=True)
-                for (record_id, _), alignment in zip(records, alignments):
+                for (record_id, _), (input_pose, chains, _) in zip(records, per_record):
+                    alignment = self._partial_a3m(input_pose, chains, staged)
                     with open(os.path.join("msas", f"{record_id}.a3m"), "w") as f:
                         f.write(alignment)
                 colabfold_input = "msas"
                 msa_option = ""
                 self.tracer_info << (
-                    f"Wrote {len(alignments)} alignment(s) to msas/\n"
+                    f"Wrote {len(records)} alignment(s) to msas/\n"
                 ) and self.tracer_info.flush()
             else:
                 with open("input.fasta", "w") as f:
@@ -252,15 +254,49 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             groups[-1][2].append(resnum)
         return [(chain, "".join(letters), numbers) for chain, letters, numbers in groups]
 
-    def _partial_a3m(self, pose, chains):
-        """The alignment for one record, pairing each chain with the file
-        covering it. Chains with no file are folded from their sequence
+    def _resolve_msa_files(self):
+        """The alignment named for each chain, as absolute paths so they
+        survive work_dir() changing directory, and None for a chain given no
+        alignment. Empty unless msa_mode is partial."""
+        if self.msa_mode_ != "partial":
+            return []
+        sources = []
+        for entry in self.existing_msa_file_.split(","):
+            entry = entry.strip()
+            if not entry:
+                sources.append(None)
+                continue
+            path = Path(entry).absolute()
+            if not path.is_file():
+                raise RuntimeError(f"existing_msa_file not found: {path}")
+            sources.append(path)
+        return sources
+
+    def _stage_alignments(self, sources):
+        """Copies each supplied alignment into the run directory and returns
+        what it holds, so the run carries the alignments it folded against."""
+        os.makedirs("input_msas", exist_ok=True)
+        staged = []
+        for index, source in enumerate(sources):
+            if source is None:
+                staged.append(None)
+                continue
+            local = Path("input_msas") / f"chain_{chain_letter(index)}_{source.name}"
+            shutil.copyfile(source, local)
+            staged.append(local.read_text())
+            self.tracer_info << (
+                f"Alignment for chain {chain_letter(index)}: {source} -> {local}\n"
+            ) and self.tracer_info.flush()
+        return staged
+
+    def _partial_a3m(self, pose, chains, alignments):
+        """The alignment for one record, pairing each chain with the one
+        supplied for it. Chains given none are folded from their sequence
         alone."""
-        paths = [path.strip() for path in self.existing_msa_file_.split(",")]
-        if len(paths) != len(chains):
+        if len(alignments) != len(chains):
             raise RuntimeError(
-                f"existing_msa_file lists {len(paths)} entry/entries but the pose has "
-                f"{len(chains)} chain(s). Give one entry per chain, in chain order, "
+                f"existing_msa_file lists {len(alignments)} entry/entries but the pose "
+                f"has {len(chains)} chain(s). Give one entry per chain, in chain order, "
                 f"leaving an entry empty for a chain with no alignment"
             )
 
@@ -273,16 +309,6 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             covered_by_chain.append(
                 [position for position, resnum in enumerate(resnums) if picked[resnum]]
             )
-
-        alignments = []
-        for path in paths:
-            if not path:
-                alignments.append(None)
-                continue
-            alignment_path = Path(path)
-            if not alignment_path.is_file():
-                raise RuntimeError(f"existing_msa_file not found: {alignment_path}")
-            alignments.append(alignment_path.read_text())
 
         return build_partial_a3m(
             [sequence for _, sequence, _ in chains], alignments, covered_by_chain

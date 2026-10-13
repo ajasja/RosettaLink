@@ -324,7 +324,7 @@ def build_partial_a3m(chain_sequences, chain_alignments, chain_covered):
     lines = [
         "#" + ",".join(str(length) for length in lengths)
         + "\t" + ",".join("1" for _ in lengths),
-        ">" + "\t".join(_chain_letter(index) for index in range(len(chain_sequences))),
+        ">" + "\t".join(chain_letter(index) for index in range(len(chain_sequences))),
         "".join(chain_sequences),
     ]
 
@@ -333,7 +333,7 @@ def build_partial_a3m(chain_sequences, chain_alignments, chain_covered):
     for index, sequence in enumerate(chain_sequences):
         before = "-" * offsets[index]
         after = "-" * (total - offsets[index] - lengths[index])
-        lines.append(">" + _chain_letter(index))
+        lines.append(">" + chain_letter(index))
         lines.append(before + sequence + after)
 
     for index, alignment in enumerate(chain_alignments):
@@ -346,7 +346,7 @@ def build_partial_a3m(chain_sequences, chain_alignments, chain_covered):
         query = without_insertions(query)
         if len(query) != len(covered):
             raise ValueError(
-                f"the alignment for chain {_chain_letter(index)} has {len(query)} "
+                f"the alignment for chain {chain_letter(index)} has {len(query)} "
                 f"query columns but covers {len(covered)} residues of that chain"
             )
         positions = [offsets[index] + position for position in covered]
@@ -362,6 +362,6 @@ def build_partial_a3m(chain_sequences, chain_alignments, chain_covered):
     return "\n".join(lines) + "\n"
 
 
-def _chain_letter(index):
+def chain_letter(index):
     letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     return letters[index % len(letters)]
