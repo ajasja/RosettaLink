@@ -39,6 +39,13 @@
   binder keeps its designed fold without the target holding it in place, and
   replace_pose="false" keeps the complex as the structure that comes out.
 
+  relax settles the prediction into the Rosetta force field before the
+  interface is scored. Without it the energies read in the thousands, as the
+  clashes a predictor leaves behind swamp them, and hbonds_int reads zero.
+  hold_backbone restrains the backbone to where the predictor put it, so the
+  structure relaxes without drifting; the designs written out are the relaxed
+  ones, and the AF2 metrics above describe the prediction they came from.
+
   analyse_interface, the simple metrics and the filters run in a FOR_EACH_POSE
   so that every design is scored and not only the first. A mover placed in the
   outer list instead would score one design and discard the rest.
@@ -47,6 +54,9 @@
 
     <SCOREFXNS>
         <ScoreFunction name="sfxn" weights="ref2015" />
+        <ScoreFunction name="sfxn_cst" weights="ref2015">
+            <Reweight scoretype="coordinate_constraint" weight="1.0" />
+        </ScoreFunction>
     </SCOREFXNS>
 
     <RESIDUE_SELECTORS>
@@ -110,6 +120,13 @@
             <metric name="plddt" base_metric="pLDDT" />
         </ColabFold>
 
+        <AddConstraintsToCurrentConformationMover name="hold_backbone"
+            use_distance_cst="false"
+            coord_dev="0.5"
+            bb_only="true" />
+
+        <FastRelax name="relax" scorefxn="sfxn_cst" repeats="1" />
+
         <InterfaceAnalyzerMover name="analyse_interface"
             interface="A_B"
             scorefxn="sfxn"
@@ -147,6 +164,8 @@
         <Add mover="predict_structure" />
         <Add mover="predict_only_binder" />
         <FOR_EACH_POSE><PROTOCOLS>
+            <Add mover="hold_backbone" />
+            <Add mover="relax" />
             <Add mover="analyse_interface" />
             <Add metrics="sap_score" />
             <Add filter="apolar_segment" />
