@@ -121,7 +121,7 @@ def test_each_mover_labels_behind_its_own_prefix(results):
 
 
 def test_the_selector_decides_what_ligandmpnn_may_redesign(results):
-	# residues_to_design is new_backbone, hidden_sidechains and anything
+	# design_selector is new_backbone, hidden_sidechains and anything
 	# within 10A of the new backbone, so the redesigned set covers the new
 	# backbone and reaches into the target without covering all of it.
 	output_dir, rows = results

@@ -17,7 +17,7 @@
   refolded design. In binder design that contig labels no motif and the
   column stays blank.
 
-  fixed_reslabel holds the motif sequence, so LigandMPNN redesigns only the
+  fixed_selector holds the motif sequence, so LigandMPNN redesigns only the
   scaffold around it.
 
   Filters are left out on purpose. A filter in the PROTOCOLS list runs on the
@@ -42,7 +42,7 @@
 
         <LigandMPNN name="design_sequence"
             batch_size="2"
-            fixed_reslabel="rfd_motif"
+            fixed_selector="rfd_motif"
             prefix_name="mpnn_" />
 
         <ColabFold name="predict_structure"

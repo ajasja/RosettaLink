@@ -19,9 +19,8 @@
 # otherwise. The exceptions are pdb_path and out_folder, which the mover
 # sets, and the *_multi options, which the mover writes itself.
 #
-# fixed_reslabel and redesigned_reslabel take a residue label instead of a
-# residue list, and residues_to_design takes a residue selector by name; all
-# three expand to --fixed_residues and --redesigned_residues.
+# fixed_selector and design_selector each name a residue selector; they
+# expand to --fixed_residues and --redesigned_residues.
 # This is how a network or motif labelled by an earlier mover is held fixed
 # without naming residues by hand.
 #
@@ -60,8 +59,8 @@ OPTION_HELP = {
     "checkpoint_global_label_membrane_mpnn": "Path to the global-label membrane weights",
     "checkpoint_soluble_mpnn": "Path to the soluble_mpnn weights",
     "checkpoint_path_sc": "Path to the sidechain packer weights",
-    "fixed_residues": "Residues to hold fixed, space separated, e.g. A12 A13 B2. Combined with any residues from fixed_reslabel",
-    "redesigned_residues": "Residues to redesign, space separated; everything else is held fixed. Combined with any residues from redesigned_reslabel",
+    "fixed_residues": "Residues to hold fixed, space separated, e.g. A12 A13 B2. Combined with any residues from fixed_selector",
+    "redesigned_residues": "Residues to redesign, space separated; everything else is held fixed. Combined with any residues from design_selector",
     "chains_to_design": "Chains to redesign, comma separated, e.g. A,B. All chains by default",
     "parse_these_chains_only": "Chains to parse from the input, comma separated",
     "bias_AA": "Global amino acid bias, e.g. A:-1.024,P:2.34",
@@ -111,9 +110,8 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         run_command="",
         batch_size="1",
         number_of_batches="1",
-        fixed_reslabel="",
-        redesigned_reslabel="",
-        residues_to_design=None,
+        fixed_selector=None,
+        design_selector=None,
         prefix_name="",
         extra_args=None,
         work_dir=None,
@@ -126,9 +124,8 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         # Total sequences designed per input pose = batch_size * number_of_batches.
         self.batch_size_ = batch_size
         self.number_of_batches_ = number_of_batches
-        self.fixed_reslabel_ = fixed_reslabel
-        self.redesigned_reslabel_ = redesigned_reslabel
-        self.residues_to_design_ = residues_to_design
+        self.fixed_selector_ = fixed_selector
+        self.design_selector_ = design_selector
         self.prefix_name_ = prefix_name
         # Pass-through command line options, empty meaning "leave unset".
         self.options_ = {name: options.get(name, "") for name in OPTION_HELP}
@@ -149,8 +146,6 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             f"\trun_command: {self.run_command_}\n"
             f"\tbatch_size: {self.batch_size_}\n"
             f"\tnumber_of_batches: {self.number_of_batches_}\n"
-            f"\tfixed_reslabel: {self.fixed_reslabel_}\n"
-            f"\tredesigned_reslabel: {self.redesigned_reslabel_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
         ) and self.tracer_info.flush()
@@ -162,32 +157,14 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         copy.run_command_ = self.run_command_
         copy.batch_size_ = self.batch_size_
         copy.number_of_batches_ = self.number_of_batches_
-        copy.fixed_reslabel_ = self.fixed_reslabel_
-        copy.redesigned_reslabel_ = self.redesigned_reslabel_
-        copy.residues_to_design_ = self.residues_to_design_
+        copy.fixed_selector_ = self.fixed_selector_
+        copy.design_selector_ = self.design_selector_
         copy.prefix_name_ = self.prefix_name_
         copy.options_ = dict(self.options_)
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
         LigandMPNN.clones_.append(copy)
         return copy
-
-    @staticmethod
-    def _residues_for_label(pose, label):
-        """Residues carrying label, in LigandMPNN chain-and-number form
-        ("A12 A13"). Empty string when the label is unset or matches
-        nothing."""
-        if not label:
-            return ""
-        selected = ResiduePDBInfoHasLabelSelector(label).apply(pose)
-        pdb_info = pose.pdb_info()
-        if pdb_info is None:
-            return ""
-        return " ".join(
-            f"{pdb_info.chain(resnum)}{pdb_info.number(resnum)}"
-            for resnum in range(1, pose.total_residue() + 1)
-            if selected[resnum]
-        )
 
     @staticmethod
     def _residues_for_selector(pose, selector):
@@ -276,15 +253,14 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
                 "fixed_residues": [
                     self._merge_residues(
                         self.options_.get("fixed_residues", ""),
-                        self._residues_for_label(input_pose, self.fixed_reslabel_),
+                        self._residues_for_selector(input_pose, self.fixed_selector_),
                     )
                     for input_pose in input_poses
                 ],
                 "redesigned_residues": [
                     self._merge_residues(
                         self.options_.get("redesigned_residues", ""),
-                        self._residues_for_label(input_pose, self.redesigned_reslabel_),
-                        self._residues_for_selector(input_pose, self.residues_to_design_),
+                        self._residues_for_selector(input_pose, self.design_selector_),
                     )
                     for input_pose in input_poses
                 ],
@@ -418,11 +394,13 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         self.run_command_ = tag.get_option_string("run_command") if tag.hasOption("run_command") else ""
         self.batch_size_ = tag.get_option_string("batch_size") if tag.hasOption("batch_size") else "1"
         self.number_of_batches_ = tag.get_option_string("number_of_batches") if tag.hasOption("number_of_batches") else "1"
-        self.fixed_reslabel_ = tag.get_option_string("fixed_reslabel") if tag.hasOption("fixed_reslabel") else ""
-        self.redesigned_reslabel_ = tag.get_option_string("redesigned_reslabel") if tag.hasOption("redesigned_reslabel") else ""
-        self.residues_to_design_ = (
-            get_residue_selector(tag.get_option_string("residues_to_design"), data)
-            if tag.hasOption("residues_to_design") else None
+        self.fixed_selector_ = (
+            get_residue_selector(tag.get_option_string("fixed_selector"), data)
+            if tag.hasOption("fixed_selector") else None
+        )
+        self.design_selector_ = (
+            get_residue_selector(tag.get_option_string("design_selector"), data)
+            if tag.hasOption("design_selector") else None
         )
         self.prefix_name_ = tag.get_option_string("prefix_name") if tag.hasOption("prefix_name") else ""
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
@@ -441,8 +419,6 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             f"\trun_command: {self.run_command_}\n"
             f"\tbatch_size: {self.batch_size_}\n"
             f"\tnumber_of_batches: {self.number_of_batches_}\n"
-            f"\tfixed_reslabel: {self.fixed_reslabel_}\n"
-            f"\tredesigned_reslabel: {self.redesigned_reslabel_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
             f"\tLigandMPNN options: {set_options}\n"
@@ -484,14 +460,9 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             "Number of batches to run. Total sequences designed = batch_size * number_of_batches",
             "1"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "fixed_reslabel",
+            "fixed_selector",
             XMLSchemaType(xs_string),
-            "Residue label whose residues are held fixed, expanded into --fixed_residues. Combined with any residues given in fixed_residues",
-            ""))
-        attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "redesigned_reslabel",
-            XMLSchemaType(xs_string),
-            "Residue label whose residues are redesigned while everything else is held fixed, expanded into --redesigned_residues. Combined with any residues given in redesigned_residues",
+            "Name of a residue selector naming the residues held fixed, expanded into --fixed_residues. Combined with any residues given in fixed_residues",
             ""))
 
         for name, help_text in OPTION_HELP.items():
@@ -507,9 +478,9 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             "Extra arguments for the LigandMPNN command, for anything this mover does not expose",
             ""))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "residues_to_design",
+            "design_selector",
             XMLSchemaType(xs_string),
-            "Name of a residue selector naming the residues to redesign. Combined with redesigned_reslabel and redesigned_residues. Compose several selectors with an Or selector and name that one here",
+            "Name of a residue selector naming the residues to redesign; everything else is held fixed. Combined with any residues given in redesigned_residues. Compose several selectors with an Or selector and name that one here",
             ""))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "prefix_name",
