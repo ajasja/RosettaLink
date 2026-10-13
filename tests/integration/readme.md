@@ -11,7 +11,7 @@ python -m pytest tests/integration -q
 A stub replays a directory recorded from a real run. That covers everything
 RosettaLink does between one program and the next, which is where its bugs
 are: the command it builds, the files it looks for afterwards, the reslabels
-it stamps, the pose buffer handing a fan-out to the next stage, the score
+it stamps, a fan-out handed to the next stage, the score
 keys, and the RMSD metrics.
 
 It does not cover the programs themselves. A stub keeps writing the layout it

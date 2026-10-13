@@ -12,8 +12,8 @@
   untouched. 4 sequences in one invocation.
 
   A structure read from a pdb carries no reslabels, so AddResidueLabel stamps
-  the three the metrics select on before anything else runs. LigandMPNN
-  carries them onto every design and ColabFold onto every prediction.
+  the two the metrics select on before anything else runs. LigandMPNN carries
+  them onto every design and ColabFold onto every prediction.
 
   scRMSD_redesigned superimposes on the redesigned chain and reports whether
   the new sequence folds to the backbone it was designed for;
@@ -30,7 +30,6 @@
 <ROSETTASCRIPTS>
 
     <RESIDUE_SELECTORS>
-        <True name="full_pose" />
         <Chain name="chain_a" chains="A" />
         <Chain name="chain_b" chains="B" />
         <ResiduePDBInfoHasLabel name="redesigned" property="redesigned" />
@@ -38,7 +37,6 @@
     </RESIDUE_SELECTORS>
 
     <MOVERS>
-        <AddResidueLabel name="label_all" residue_selector="full_pose" label="all" />
         <AddResidueLabel name="label_redesigned" residue_selector="chain_a" label="redesigned" />
         <AddResidueLabel name="label_target" residue_selector="chain_b" label="target" />
 
@@ -63,7 +61,6 @@
     </MOVERS>
 
     <PROTOCOLS>
-        <Add mover="label_all" />
         <Add mover="label_redesigned" />
         <Add mover="label_target" />
         <Add mover="design_sequence" />

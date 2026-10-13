@@ -15,19 +15,18 @@
   cost of accuracy: refolding a natural sequence this way gives a low pLDDT
   and a large RMSD. Use an mmseqs2 mode for a prediction to rely on.
 
-  AddResidueLabel stamps the label the RMSD tag measures over. An input read
-  from a pdb carries no reslabels of its own, unlike a pose coming from
-  RFdiffusion or LigandMPNN, so without it the RMSD would match nothing and
-  be skipped.
+  An RMSD tag with no calculation_selector measures every residue, so this
+  protocol needs no reslabels of its own. An input read from a pdb carries
+  none, unlike a pose coming from RFdiffusion or LigandMPNN; to measure over
+  part of one, stamp a label with AddResidueLabel and select on it, as
+  examples/sequence_redesign.xml does.
 -->
 <ROSETTASCRIPTS>
 
     <RESIDUE_SELECTORS>
-        <True name="full_pose" />
     </RESIDUE_SELECTORS>
 
     <MOVERS>
-        <AddResidueLabel name="label_all" residue_selector="full_pose" label="all" />
 
         <ColabFold name="predict_structure"
             models="1"
@@ -40,7 +39,6 @@
     </MOVERS>
 
     <PROTOCOLS>
-        <Add mover="label_all" />
         <Add mover="predict_structure" />
     </PROTOCOLS>
 

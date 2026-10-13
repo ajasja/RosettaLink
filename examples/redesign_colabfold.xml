@@ -10,10 +10,12 @@
           -var num_sequences=2 \
           -var work_dir=output/redesign
 
-  Each stage receives every design of the stage before it
-  through the RosettaLink pose buffer, so ColabFold folds all of them in a
-  single invocation instead of one invocation per sequence. The protocol
-  produces num_sequences output structures.
+  Each stage receives every design of the stage before it, so ColabFold folds
+  all of them in a single invocation instead of one per sequence. The
+  protocol produces num_sequences output structures.
+
+  from_input is stamped before anything runs, so it tracks whether a reslabel
+  survives being written to disk and read back by both tools.
 
   Neither mover carries a run_command here, so both come from
   rosettalink.config.yaml.
@@ -25,7 +27,9 @@
     </RESIDUE_SELECTORS>
 
     <MOVERS>
-        <AddResidueLabel name="label_all" residue_selector="full_pose" label="all" />
+
+        <AddResidueLabel name="label_input"
+            residue_selector="full_pose" label="from_input" />
 
         <LigandMPNN name="make_sequence"
             batch_size="{num_sequences}"
@@ -46,7 +50,7 @@
     </FILTERS>
 
     <PROTOCOLS>
-        <Add mover="label_all" />
+        <Add mover="label_input" />
         <Add mover="make_sequence" />
         <Add mover="predict_structure" />
         <Add filter="netcharge" />

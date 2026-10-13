@@ -28,10 +28,9 @@
 
   Reading the result: compare the number of backbones RFdiffusion wrote in
   01_rfdiff with the number of structures in the output, and with the count
-  of "Secondary structure count" lines in the log. Under the pose buffer, a
-  dropped first pose leaves LigandMPNN a single pose, and a dropped later pose
-  does not reach LigandMPNN at all, so the output count is only meaningful
-  together with which poses the filter rejected.
+  of "Secondary structure count" lines in the log. Every surviving backbone
+  reaches LigandMPNN and none that was rejected does, so the output count is
+  the number that passed times num_sequences.
 -->
 <ROSETTASCRIPTS>
 
