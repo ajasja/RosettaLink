@@ -25,9 +25,9 @@
   again there and cannot be shared with the outer script. Change one and
   change the other.
 
-  docs/two_helices.xml is the same protocol written with FOR_EACH_POSE,
-  which needs a PyRosetta build carrying RosettaCommons/rosetta pull
-  request 494.
+  binder_design_advanced.xml writes the same per design scoring with
+  FOR_EACH_POSE, which needs a PyRosetta build carrying
+  RosettaCommons/rosetta pull request 494.
 -->
 <ROSETTASCRIPTS>
 

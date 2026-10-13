@@ -87,6 +87,6 @@ warning on stderr and the stub prints a summary line at the end; a run that
 needs no reuse prints neither.
 
 The binder fixture holds four ColabFold predictions, recorded at two
-sequences per backbone. `docs/two_helices.xml` asks for three, so replaying it
-reuses two recordings. Recording a fixture at that protocol's own counts
-removes the reuse and makes this fallback inert.
+sequences per backbone. A protocol asking for three replays two recordings
+twice. Recording a fixture at that protocol's own counts removes the reuse
+and makes this fallback inert.
