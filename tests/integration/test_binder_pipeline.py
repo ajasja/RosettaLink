@@ -100,7 +100,7 @@ def test_the_binder_length_is_within_the_contig_range(results):
 
 
 def test_the_target_sequence_is_not_redesigned(results):
-	# fixed_reslabel holds the target fixed, so every design carries the
+	# fixed_selector holds the target fixed, so every design carries the
 	# sequence the target came in with rather than a designed one.
 	import pyrosetta
 
