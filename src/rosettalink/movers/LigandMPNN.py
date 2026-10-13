@@ -59,8 +59,8 @@ OPTION_HELP = {
     "checkpoint_global_label_membrane_mpnn": "Path to the global-label membrane weights",
     "checkpoint_soluble_mpnn": "Path to the soluble_mpnn weights",
     "checkpoint_path_sc": "Path to the sidechain packer weights",
-    "fixed_residues": "Residues to hold fixed, space separated, e.g. A12 A13 B2. Combined with any residues from fixed_selector",
-    "redesigned_residues": "Residues to redesign, space separated; everything else is held fixed. Combined with any residues from design_selector",
+    "fixed_residues": "Residues to hold fixed, comma separated, e.g. A12,A13,B2. Combined with any residues from fixed_selector",
+    "redesigned_residues": "Residues to redesign, comma separated, e.g. A12,A13,B2; everything else is held fixed. Combined with any residues from design_selector",
     "chains_to_design": "Chains to redesign, comma separated, e.g. A,B. All chains by default",
     "parse_these_chains_only": "Chains to parse from the input, comma separated",
     "bias_AA": "Global amino acid bias, e.g. A:-1.024,P:2.34",
@@ -168,15 +168,15 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
 
     @staticmethod
     def _residues_for_selector(pose, selector):
-        """Residues a residue selector picks, in LigandMPNN chain-and-number
-        form. Empty string when no selector is set."""
+        """Residues a residue selector picks, comma separated, in
+        chain-and-number form. Empty string when no selector is set."""
         if selector is None:
             return ""
         selected = selector.apply(pose)
         pdb_info = pose.pdb_info()
         if pdb_info is None:
             return ""
-        return " ".join(
+        return ",".join(
             f"{pdb_info.chain(resnum)}{pdb_info.number(resnum)}"
             for resnum in range(1, pose.total_residue() + 1)
             if selected[resnum]
@@ -215,10 +215,22 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
 
     @staticmethod
     def _merge_residues(*residue_lists):
-        """Joins residue lists, dropping duplicates and keeping order."""
+        """Joins comma separated residue lists, dropping duplicates and
+        keeping order, in the space separated form LigandMPNN takes.
+
+        Raises ValueError on a residue holding a space, which is a list
+        written with the wrong separator."""
         merged = []
         for residue_list in residue_lists:
-            for residue in (residue_list or "").split():
+            for residue in (residue_list or "").split(","):
+                residue = residue.strip()
+                if not residue:
+                    continue
+                if any(character.isspace() for character in residue):
+                    raise ValueError(
+                        f"Residues are separated by commas, so {residue!r} is "
+                        "not one residue. Write A12,A13,B2"
+                    )
                 if residue not in merged:
                     merged.append(residue)
         return " ".join(merged)
