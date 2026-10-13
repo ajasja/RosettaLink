@@ -16,7 +16,7 @@
 <ROSETTASCRIPTS>
 
     <RESIDUE_SELECTORS>
-        <TrueResidueSelector name="all" />
+        <True name="all" />
         <ResiduePDBInfoHasLabel name="rfd_new_backbone" property="rfd_new_backbone" />
         <ResiduePDBInfoHasLabel name="rfd_fixed" property="rfd_fixed" />
     </RESIDUE_SELECTORS>
@@ -36,7 +36,7 @@
             models="1,2"
             msa_mode="partial"
             existing_msa_selector="rfd_fixed"
-            existing_msa_file="input_data/existing_msa.m3a"
+            existing_msa_file=",examples/input_data/Insulin_Alignment/insulin_target_Chain_B.a3m"
             prefix_name="AF2_"
             replace_pose="true">
             #all should be default selector if nothing is specified
