@@ -1,7 +1,7 @@
 """examples/redesign_colabfold.xml end to end, against stubbed programs.
 
 LigandMPNN designs two sequences for the input backbone and ColabFold folds
-both in one invocation, so this covers the pose buffer handing a fan out from
+both in one invocation, so this covers a fan out handed from
 one batched mover to the next, the reslabels surviving both disk round trips,
 and the score keys and RMSD metric landing on every output pose.
 
@@ -67,14 +67,15 @@ def test_the_rmsd_is_a_real_measurement(results):
 
 
 def test_reslabels_survive_both_disk_round_trips(results):
-	# The label is stamped before LigandMPNN, carried onto its designs, then
-	# onto the ColabFold prediction, and is what the RMSD selects on.
+	# from_input is stamped before LigandMPNN, carried onto its designs and
+	# then onto the ColabFold prediction, so it only survives if both tools
+	# round trip reslabels through disk.
 	output_dir, rows = results
 
 	for row in rows:
 		text = (output_dir / row["description"]).read_text()
 		assert "PDBinfo-LABEL" in text
-		assert " all" in text
+		assert " from_input" in text
 
 
 def test_each_design_is_folded_separately(results):
