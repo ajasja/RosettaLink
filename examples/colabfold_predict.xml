@@ -1,0 +1,47 @@
+<!--
+  Refold an input structure with ColabFold and report its confidence and a
+  self-consistency RMSD against the structure it was handed.
+
+      rosetta_link_scripts \
+          -parser:protocol examples/colabfold_predict.xml \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/colabfold_predict \
+          -var work_dir=output/colabfold_predict/colabfold
+
+  ColabFold reads its run_command from the ColabFold section of
+  rosettalink.config.yaml. Set run_command on the tag to override it.
+
+  msa_mode="single_sequence" needs no MSA server and makes this quick, at the
+  cost of accuracy: refolding a natural sequence this way gives a low pLDDT
+  and a large RMSD. Use an mmseqs2 mode for a prediction to rely on.
+
+  AddResidueLabel stamps the label the RMSD tag measures over. An input read
+  from a pdb carries no reslabels of its own, unlike a pose coming from
+  RFdiffusion or LigandMPNN, so without it the RMSD would match nothing and
+  be skipped.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <True name="full_pose" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <AddResidueLabel name="label_all" residue_selector="full_pose" label="all" />
+
+        <ColabFold name="predict_structure"
+            models="1"
+            msa_mode="single_sequence"
+            prefix_name="AF2_"
+            replace_pose="1"
+            work_dir="{work_dir}">
+            <RMSD name="scRMSD_all" calculation="all" />
+        </ColabFold>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="label_all" />
+        <Add mover="predict_structure" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
