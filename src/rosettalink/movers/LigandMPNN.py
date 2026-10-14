@@ -323,13 +323,9 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             self.tracer_info << f"We are using temporary directory: {run_dir} \n" and self.tracer_info.flush()
             self.tracer_info << f"Designing sequences for {len(input_poses)} pose(s)\n" and self.tracer_info.flush()
 
-            # One input pdb per pose. With a single pose the name stays
-            # input.pdb; otherwise the stem identifies which outputs belong to
-            # which input, since LigandMPNN names its output after it.
-            if len(input_poses) == 1:
-                stems = ["input"]
-            else:
-                stems = [f"design_{index}" for index in range(len(input_poses))]
+            # One input pdb per pose. The stem identifies which outputs belong
+            # to which input, since LigandMPNN names its output after it.
+            stems = [f"design_{index}" for index in range(len(input_poses))]
             for stem, input_pose in zip(stems, input_poses):
                 pyrosetta.dump_pdb(input_pose, f"{stem}.pdb")
 
