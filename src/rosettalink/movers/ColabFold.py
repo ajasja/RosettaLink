@@ -33,7 +33,9 @@
 # these structures have no correspondence to the input pose, reslabels and
 # RMSD metrics are skipped.
 
+import itertools
 import json
+import math
 import os
 import shutil
 from pathlib import Path
@@ -56,6 +58,37 @@ from rosettalink.utils import setup_tracer
 from rosettalink.utils import work_dir
 import rosettalink.movers.BaseLinkMover as BaseLinkMover
 
+# Chains are paired with chains by trying every order, so the count has to
+# stay small. 6 chains is 720 orders.
+MAX_CHAIN_PAIRINGS = 720
+
+
+def _ca_coordinates(pose, resnums):
+    """Alpha carbons of the residues given, as an array of rows."""
+    return np.array([list(pose.residue(resnum).xyz("CA")) for resnum in resnums])
+
+
+def _superimposed_ca_rmsd(moved, fixed):
+    """RMSD between two equal length sets of coordinates, superimposed.
+
+    Scores one way of pairing chains against another. Rosetta's
+    superimpose_pose raises on two structures that sit exactly on top of each
+    other, which a pairing of a pose against itself does."""
+    moved = moved - moved.mean(axis=0)
+    fixed = fixed - fixed.mean(axis=0)
+    left, _, right = np.linalg.svd(moved.T @ fixed)
+    handedness = np.sign(np.linalg.det(left @ right))
+    rotation = left @ np.diag([1.0, 1.0, handedness]) @ right
+    return float(np.sqrt((((moved @ rotation) - fixed) ** 2).sum(axis=1).mean()))
+
+
+def _residue_map(mapping):
+    """A {resnum: resnum} dict as the std::map RMSDMetric takes."""
+    converted = pyrosetta.rosetta.std.map_unsigned_long_unsigned_long()
+    for key, value in mapping.items():
+        converted[key] = value
+    return converted
+
 
 class ColabFold(BaseLinkMover.BaseLinkMover):
     clones_ = list()
@@ -63,6 +96,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
     def __init__(
         self,
         replace_pose=True,
+        match_chains=True,
         fasta="",
         models="1,2,3,4,5",
         msa_mode="single_sequence",
@@ -84,6 +118,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         self.additional_poses_ = []
 
         self.replace_pose_ = replace_pose
+        self.match_chains_ = match_chains
         self.fasta_ = fasta
         self.models_ = models
         self.msa_mode_ = msa_mode
@@ -114,6 +149,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
     def clone(self):
         copy = ColabFold()
         copy.replace_pose_ = self.replace_pose_
+        copy.match_chains_ = self.match_chains_
         copy.fasta_ = self.fasta_
         copy.models_ = self.models_
         copy.msa_mode_ = self.msa_mode_
@@ -448,7 +484,16 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
 
         A selector is read on the prediction and carried to the pose it came
         from through folded_resnums, so the two sides hold the same residues
-        even when subset_selector folded only part of the pose."""
+        even when subset_selector folded only part of the pose.
+
+        The chains are matched first when match_chains is set, since a
+        predictor names the chains of a homo-oligomer in whatever order it
+        likes."""
+        matched = None
+        if self.match_chains_ and self.rmsd_metrics:
+            matched = self._matched_chain_mapping(
+                prediction, input_pose, folded_resnums
+            )
         for rmsd in self.rmsd_metrics:
             measured = self._selected_positions(prediction, rmsd["calculation"])
             if not measured:
@@ -484,6 +529,20 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             if superimpose is not None:
                 rmsd_metric.set_residue_selector_super(superimpose[0])
                 rmsd_metric.set_residue_selector_super_reference(superimpose[1])
+            if matched is not None:
+                if superimpose is not None:
+                    # A residue mapping replaces the selectors inside
+                    # RMSDMetric, the superposition ones included, so the two
+                    # cannot be given together.
+                    self.tracer_warning << (
+                        f"RMSD {rmsd['name']}: measuring on the chains as named, "
+                        f"since alignment_selector and matched chains cannot be "
+                        f"used together\n"
+                    ) and self.tracer_warning.flush()
+                else:
+                    rmsd_metric.set_residue_mapping(
+                        _residue_map({position: matched[position] for position in measured})
+                    )
             # RMSDMetric does not align by default, which for a prediction in
             # its own reference frame measures the frame offset rather than
             # any structural difference.
@@ -496,6 +555,96 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             rmsd_name = f"{self.prefix_name_}{rmsd['name']}"
             setPoseExtraScore(emitted, rmsd_name, rmsd_value)
             self.tracer_info << f"\t{rmsd_name}: {rmsd_value}\n" and self.tracer_info.flush()
+
+    @staticmethod
+    def _chains_in_order(pose, resnums):
+        """[(chain letter, [resnum, ...]), ...] for the residues given, chains
+        in the order they first appear."""
+        pdb_info = pose.pdb_info()
+        chains = []
+        index = {}
+        for resnum in resnums:
+            letter = pdb_info.chain(resnum) if pdb_info is not None else str(pose.chain(resnum))
+            if letter not in index:
+                index[letter] = len(chains)
+                chains.append((letter, []))
+            chains[index[letter]][1].append(resnum)
+        return chains
+
+    def _chain_pairings(self, prediction, input_pose, folded_resnums):
+        """Every way of pairing the prediction's chains with the chains of the
+        pose it was folded from, as a {prediction resnum: pose resnum} map.
+
+        The identity pairing comes first. Chains pair only with chains of the
+        same sequence and length, so a complex of unlike chains has the
+        identity and nothing else."""
+        positions = list(range(1, prediction.total_residue() + 1))
+        predicted = self._chains_in_order(prediction, positions)
+        folded = self._chains_in_order(
+            input_pose, [folded_resnums[position - 1] for position in positions]
+        )
+        if len(predicted) != len(folded) or len(predicted) < 2:
+            return [dict(zip(positions, [folded_resnums[p - 1] for p in positions]))]
+        if math.factorial(len(predicted)) > MAX_CHAIN_PAIRINGS:
+            self.tracer_warning << (
+                f"Not matching chains: {len(predicted)} of them is too many to "
+                f"pair exhaustively\n"
+            ) and self.tracer_warning.flush()
+            return [dict(zip(positions, [folded_resnums[p - 1] for p in positions]))]
+
+        def sequence(pose, resnums):
+            return "".join(pose.residue(resnum).name1() for resnum in resnums)
+
+        folded_sequences = [sequence(input_pose, members) for _, members in folded]
+
+        pairings = []
+        for order in itertools.permutations(range(len(folded))):
+            # Only chains the pose holds twice can trade places, and a chain
+            # pairs only with one the prediction gave the same length.
+            if any(
+                folded_sequences[order[i]] != folded_sequences[i]
+                or len(predicted[i][1]) != len(folded[order[i]][1])
+                for i in range(len(order))
+            ):
+                continue
+            mapping = {}
+            for i, j in enumerate(order):
+                mapping.update(zip(predicted[i][1], folded[j][1]))
+            pairings.append((order == tuple(range(len(folded))), order, mapping))
+        # The identity first, so an equal score keeps the chains as named.
+        pairings.sort(key=lambda entry: not entry[0])
+        return [mapping for _, _, mapping in pairings] or [
+            dict(zip(positions, [folded_resnums[p - 1] for p in positions]))
+        ]
+
+    def _matched_chain_mapping(self, prediction, input_pose, folded_resnums):
+        """The {prediction resnum: pose resnum} map that fits best, or None
+        when the chains are already paired as named.
+
+        A predictor names the chains of a homo-oligomer in whatever order it
+        likes, and residue i of chain A is then compared against a different
+        chain of the pose."""
+        pairings = self._chain_pairings(prediction, input_pose, folded_resnums)
+        if len(pairings) < 2:
+            return None
+
+        def score(mapping):
+            pairs = sorted(mapping.items())
+            return _superimposed_ca_rmsd(
+                _ca_coordinates(prediction, [position for position, _ in pairs]),
+                _ca_coordinates(input_pose, [resnum for _, resnum in pairs]),
+            )
+
+        scores = [score(mapping) for mapping in pairings]
+        best = min(range(len(scores)), key=lambda i: scores[i])
+        if best == 0:
+            return None
+        self.tracer_info << (
+            f"Chains of the prediction match the pose in another order: "
+            f"CA RMSD {scores[0]:.2f} as named, {scores[best]:.2f} matched. "
+            f"Measuring every RMSD on the matched chains\n"
+        ) and self.tracer_info.flush()
+        return pairings[best]
 
     @staticmethod
     def _selected_positions(pose, selector):
@@ -526,6 +675,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
         self.run_command_ = tag.get_option_string("run_command") if tag.hasOption("run_command") else ""
         self.fasta_ = tag.get_option_string("fasta") if tag.hasOption("fasta") else ""
         self.replace_pose_ = tag.get_option_bool("replace_pose") if tag.hasOption("replace_pose") else True
+        self.match_chains_ = tag.get_option_bool("match_chains") if tag.hasOption("match_chains") else True
         self.models_ = tag.get_option_string("models") if tag.hasOption("models") else "1,2,3,4,5"
         self.msa_mode_ = tag.get_option_string("msa_mode") if tag.hasOption("msa_mode") else "single_sequence"
         self.existing_msa_file_ = tag.get_option_string("existing_msa_file") if tag.hasOption("existing_msa_file") else ""
@@ -634,6 +784,11 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             "replace_pose",
             XMLSchemaType(xs_boolean),
             "Whether current pose is replaced with the rank_001 prediction",
+            "true"))
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
+            "match_chains",
+            XMLSchemaType(xs_boolean),
+            "Whether an RMSD pairs the chains of the prediction with the chains of the pose by fit rather than by name. A predictor names the chains of a homo-oligomer in whatever order it likes, which otherwise compares one chain against another and reports a large number for a structure that matches. Chains pair only with chains of the same sequence, so a complex of unlike chains is unaffected. It changes nothing about the pose the mover emits, and is not applied to an RMSD that sets alignment_selector",
             "true"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "fasta",
