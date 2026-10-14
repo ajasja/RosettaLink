@@ -65,8 +65,6 @@ OPTION_HELP = {
     "bias_AA_per_residue": "Path to a json of per-residue amino acid biases",
     "omit_AA": "Amino acids to omit everywhere, e.g. ACG",
     "omit_AA_per_residue": "Path to a json of per-residue amino acids to omit",
-    "symmetry_residues": "Residue groups tied together, e.g. A12,A13|C2,C3",
-    "symmetry_weights": "Weights matching symmetry_residues, e.g. 1.01,1.0|-1.0,2.0",
     "homo_oligomer": "Set to 1 to apply homo-oligomer symmetry automatically",
     "temperature": "Sampling temperature. LigandMPNN default is 0.1",
     "seed": "Random seed. LigandMPNN default is 0",
@@ -110,6 +108,7 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         design_selector=None,
         transmembrane_buried_selector=None,
         transmembrane_interface_selector=None,
+        tied_positions=None,
         prefix_name="",
         extra_args=None,
         work_dir=None,
@@ -126,6 +125,9 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         self.design_selector_ = design_selector
         self.transmembrane_buried_selector_ = transmembrane_buried_selector
         self.transmembrane_interface_selector_ = transmembrane_interface_selector
+        # One entry per TiedPositions subtag: selectors tied position by
+        # position, and the weight every residue of those groups carries.
+        self.tied_positions_ = list(tied_positions or [])
         self.prefix_name_ = prefix_name
         # Pass-through command line options, empty meaning "leave unset".
         self.options_ = {name: options.get(name, "") for name in OPTION_HELP}
@@ -161,6 +163,7 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         copy.design_selector_ = self.design_selector_
         copy.transmembrane_buried_selector_ = self.transmembrane_buried_selector_
         copy.transmembrane_interface_selector_ = self.transmembrane_interface_selector_
+        copy.tied_positions_ = list(self.tied_positions_)
         copy.prefix_name_ = self.prefix_name_
         copy.options_ = dict(self.options_)
         copy.extra_args_ = self.extra_args_
@@ -209,6 +212,66 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         return every - cls._resnums_for_residues(pose, fixed)
 
     @staticmethod
+    def _parse_tied_positions_tag(tag, data):
+        """One TiedPositions subtag: the residue selectors it ties and the
+        weight their residues carry, None when unset."""
+        names = [
+            name.strip()
+            for name in tag.get_option_string("residues_selectors").split(",")
+            if name.strip()
+        ]
+        if len(names) < 2:
+            raise ValueError(
+                "TiedPositions residues_selectors names "
+                f"{len(names)} selector(s). Tying positions together takes at "
+                "least two, given as a comma separated list"
+            )
+        return {
+            "names": names,
+            "selectors": [get_residue_selector(name, data) for name in names],
+            "weight": (
+                tag.get_option_real("weight") if tag.hasOption("weight") else None
+            ),
+        }
+
+    @classmethod
+    def _tied_positions_arguments(cls, pose, ties):
+        """The --symmetry_residues and --symmetry_weights strings for a list
+        of TiedPositions entries.
+
+        Each entry ties its selectors position by position: the first residue
+        of each selector forms one group, the second another, and so on. A
+        group holds one residue per selector, which is what LigandMPNN ties to
+        a single amino acid. Raises ValueError when the selectors of one entry
+        pick different numbers of residues."""
+        groups = []
+        weights = []
+        for tie in ties:
+            picked = [
+                cls._residues_for_selector(pose, selector).split()
+                for selector in tie["selectors"]
+            ]
+            counts = [len(residues) for residues in picked]
+            if len(set(counts)) > 1:
+                named = ", ".join(
+                    f"{name} picks {count}"
+                    for name, count in zip(tie["names"], counts)
+                )
+                raise ValueError(
+                    f"TiedPositions ties selectors position by position, so "
+                    f"they have to pick the same number of residues: {named}"
+                )
+            if not counts or not counts[0]:
+                continue
+            weight = tie["weight"]
+            if weight is None:
+                weight = 1 / len(picked)
+            for tied in zip(*picked):
+                groups.append(",".join(tied))
+                weights.append(",".join(f"{weight:g}" for _ in tied))
+        return "|".join(groups), "|".join(weights)
+
+    @staticmethod
     def _write_json(name, contents):
         """Writes one of the LigandMPNN *_multi json files into the run
         directory and returns its name."""
@@ -240,6 +303,19 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
                 "transmembrane_interface, so the mover cannot process "
                 "multiple poses at once. Consider using a FOR_EACH_POSE to "
                 "decouple the calls"
+            )
+        if self.tied_positions_ and len(input_poses) > 1:
+            raise ValueError(
+                f"TiedPositions set, with {len(input_poses)} input poses. "
+                "LigandMPNN has no _multi parameter for symmetry_residues, so "
+                "the mover cannot process multiple poses at once. Consider "
+                "using a FOR_EACH_POSE to decouple the calls"
+            )
+        if self.tied_positions_ and self.options_.get("homo_oligomer", "") in TRUE_VALUES:
+            raise ValueError(
+                "TiedPositions and homo_oligomer are both set. LigandMPNN "
+                "builds its own groups for homo_oligomer and overwrites the "
+                "ones TiedPositions names, so set one or the other"
             )
 
         with work_dir(self.work_dir_) as run_dir:
@@ -314,6 +390,13 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             for name, value in membrane_lists.items():
                 if value:
                     ligmpnn_cmd_str += f' --{name} "{value}"'
+
+            symmetry_residues, symmetry_weights = self._tied_positions_arguments(
+                input_poses[0], self.tied_positions_
+            )
+            if symmetry_residues:
+                ligmpnn_cmd_str += f' --symmetry_residues "{symmetry_residues}"'
+                ligmpnn_cmd_str += f' --symmetry_weights "{symmetry_weights}"'
 
             for name, value in self.options_.items():
                 if value != "" and value is not None:
@@ -424,6 +507,11 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
             get_residue_selector(tag.get_option_string("transmembrane_interface_selector"), data)
             if tag.hasOption("transmembrane_interface_selector") else None
         )
+        self.tied_positions_ = [
+            self._parse_tied_positions_tag(child, data)
+            for child in tag.getTags()
+            if child.getName() == "TiedPositions"
+        ]
         self.prefix_name_ = tag.get_option_string("prefix_name") if tag.hasOption("prefix_name") else ""
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else None
@@ -453,7 +541,7 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
     @classmethod
     def provide_xml_schema(cls, xsd):
         from pyrosetta.rosetta.utility.tag import XMLSchemaAttribute, XMLSchemaType
-        from pyrosetta.rosetta.utility.tag import xs_string, xs_integer
+        from pyrosetta.rosetta.utility.tag import xs_string, xs_integer, xs_decimal
 
         attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
@@ -529,10 +617,24 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
                         Runs LigandMPNN to design sequences onto the pose backbone.
                       '''
 
-        pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes(
-            xsd,
-            cls.mover_name(),
-            description, attrlist)
+        tied_attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
+        tied_attrlist.append(XMLSchemaAttribute.required_attribute(
+            "residues_selectors",
+            XMLSchemaType(xs_string),
+            "Names of two or more residue selectors, comma separated, tied position by position: the first residue each one picks forms one group, the second another, and so on. Every selector has to pick the same number of residues. A group is held to a single amino acid, so two chains of a homodimer give one group per position rather than one group per chain"))
+        tied_attrlist.append(XMLSchemaAttribute.attribute_w_default(
+            "weight",
+            XMLSchemaType(xs_decimal),
+            "Linking weight carried by every residue of the groups this subtag makes. One divided by the number of selectors by default, which is what LigandMPNN uses for a homo-oligomer",
+            "0"))
+
+        subelements = pyrosetta.rosetta.utility.tag.XMLSchemaSimpleSubelementList()
+        subelements.add_simple_subelement(
+            "TiedPositions",
+            tied_attrlist,
+            "Residue selectors tied position by position, expanded into --symmetry_residues and --symmetry_weights")
+        pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes_and_repeatable_subelements(
+            xsd, cls.mover_name(), description, attrlist, subelements)
 
 
 @register_mover
