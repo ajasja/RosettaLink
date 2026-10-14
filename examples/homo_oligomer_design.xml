@@ -1,0 +1,95 @@
+<!--
+  Homo-oligomer design: RFdiffusion builds a C3 symmetric backbone from
+  nothing and LigandMPNN gives its three chains one shared sequence.
+
+      rosetta_link_scripts \
+          -parser:protocol examples/homo_oligomer_design.xml \
+          -out:path output/homo_oligomer
+
+  No input structure: the contig names only de novo residues, so there is no
+  -s and no inference.input_pdb. 2 backbones x 2 sequences = 4 designs.
+
+  RFdiffusion samples symmetric assemblies from a config of its own, named in
+  extra_args. Under it the contig is one length, the total over every chain,
+  and it has to divide evenly by the number of chains: 180 is 3 x 60. Written
+  as a range, because a bare number reaches RFdiffusion as an integer and it
+  reads its contigs as strings.
+
+  The override comes before the config-name flag on purpose. RFdiffusion
+  reads its overrides as positional arguments and stops collecting them at the
+  first flag, so anything written after that flag is rejected as an
+  unrecognised argument.
+
+  TiedPositions ties the three chains position by position, so each group
+  holds one residue per chain and the three chains come out identical.
+
+  LigandMPNN also has a homo_oligomer option that builds the same groups
+  itself, and it cannot be used here. It takes the residue numbers of one
+  chain and puts every chain letter in front of them, which needs each chain
+  to repeat the same numbering. RFdiffusion numbers a symmetric design right
+  through: chain A is 1-60, chain B is 61-120, chain C is 121-180, so that
+  option looks for a residue B121 which does not exist and LigandMPNN stops
+  with a KeyError. TiedPositions reads the residues from the pose instead, so
+  it ties A1, B61 and C121. Use homo_oligomer on a structure whose chains each
+  start at 1, as a deposited trimer does.
+
+  scRMSD_all pairs residue i of chain A with residue i of chain A, chain B
+  with chain B and so on, so it says something only when the prediction names
+  the chains the way the design does. A predictor has no reason to. On a
+  homotrimer it can label them in the opposite cyclic order, which no rotation
+  undoes, and the number then comes out large for a structure that matches.
+  scRMSD_chain covers one chain against that same chain and is free of it.
+  Read it for self consistency, and treat a large scRMSD_all on a
+  homo-oligomer as a question rather than an answer.
+
+  The design and prediction stages are in a FOR_EACH_POSE because
+  TiedPositions takes a single input pose: symmetry_residues has no _multi
+  counterpart, so one list covers a whole LigandMPNN run and the two backbones
+  have to be designed one at a time.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <Chain name="chain_A" chains="A" />
+        <Chain name="chain_B" chains="B" />
+        <Chain name="chain_C" chains="C" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <RFdiffusion name="design_backbone"
+            contig="[180-180]"
+            num_designs="2"
+            extra_args="inference.symmetry=c3 --config-name symmetry"
+            prefix_name="rfd_"
+            work_dir="01_rfdiff" />
+
+        <LigandMPNN name="design_sequence"
+            batch_size="2"
+            temperature="0.3"
+            prefix_name="mpnn_"
+            work_dir="02_ligandmpnn">
+            <TiedPositions residues_selectors="chain_A,chain_B,chain_C" />
+        </LigandMPNN>
+
+        <ColabFold name="predict_structure"
+            models="1,2"
+            msa_mode="single_sequence"
+            prefix_name="AF2_"
+            replace_pose="true"
+            work_dir="03_colabfold">
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_chain" calculation_selector="chain_A" />
+            <metric name="plddt_all" base_metric="pLDDT" />
+            <metric name="pAE_all" base_metric="pAE" />
+        </ColabFold>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add mover="design_sequence" />
+            <Add mover="predict_structure" />
+        </PROTOCOLS></FOR_EACH_POSE>
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
