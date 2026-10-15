@@ -1,69 +1,21 @@
 <!--
-  Symmetry redesign: the three chains of a homotrimer share one sequence, and
-  only the surface where they meet is redesigned.
+  Symmetry redesign: LigandMPNN redesigns the interface core of a coiled-coil
+  homotrimer (Lpp-56, assembly 1 of PDB 1KFM) with the three chains tied, so
+  they keep one sequence; ColabFold refolds. 2 designs.
 
-      rosetta_link_scripts \
-          -parser:protocol examples/symmetry_redesign.xml \
-          -s examples/input_data/coiled_coil_trimer.pdb \
-          -out:path output/symmetry_redesign
+      rosetta_link_scripts -parser:protocol examples/symmetry_redesign.xml \
+          -s examples/input_data/coiled_coil_trimer.pdb -out:path output/symmetry_redesign
 
-  The input is Lpp-56, the trimerisation domain of the Escherichia coli outer
-  membrane lipoprotein: a parallel three stranded coiled coil of 50 residues
-  per chain, from biological assembly 1 of PDB 1KFM.
+  or on a slurm cluster, from the repository root:
 
-  TiedPositions ties the three selectors position by position, so the first
-  residue each one picks makes one group, the second the next, and so on. A
-  group is held to a single amino acid, which is what makes the three chains
-  come out identical. One selector per chain would instead say that a whole
-  chain is one amino acid.
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/symmetry_redesign.xml \
+          -s examples/input_data/coiled_coil_trimer.pdb -out:path output/symmetry_redesign
 
-  interface_A, interface_B and interface_C pick the residues of one chain
-  within 6 A of another chain: 23 of each chain here, 69 of the 150 in the
-  trimer. On a coiled coil those are the a and d positions of the heptad, the
-  core that holds the three helices together. design_selector names the three
-  together, so everything outside that core keeps the sequence it came in
-  with.
-
-  The input has to be symmetric for this to be right, and that is why it is an
-  assembly rather than a deposited model. 1KFM has one chain in the asymmetric
-  unit, and the other two are made by the crystallographic three fold, so the
-  three are exact copies and the selector picks the same positions on each.
-
-  Measured on a trimer whose three chains were each deposited, the same kind
-  of selector picked 14 residues on every chain, which passes the equal count
-  check TiedPositions makes, but not the same 14: one chain had residues 1 and
-  2 where another had 2 and 26. Tied position by position, that pairs residue
-  1 of one chain with residue 2 of another. Equal counts are necessary, not
-  sufficient, so check what a selector picks on each chain before tying
-  selectors that were not built from exact symmetry.
-
-  weight is left out, so each residue of a group carries one third, the value
-  LigandMPNN uses for a homo-oligomer. temperature is over the LigandMPNN
-  default of 0.1, which gives the two designs room to differ.
-
-  Each chain of this input carries the same residue numbers, so homo_oligomer
-  would tie the chains here as well. It ties every position of every chain
-  rather than the ones a selector names, which says nothing about what is
-  redesigned: design_selector decides that either way. What it does need is
-  the repeated numbering, which a design coming out of RFdiffusion does not
-  have. See examples/homo_oligomer_design.xml.
-
-  LigandMPNN takes a single input pose whenever TiedPositions is set, since
-  symmetry_residues has no _multi counterpart and one list covers a whole run.
-  This stage is first in the protocol, so it receives one pose anyway.
-
-  scRMSD_all pairs residue i of chain A with residue i of chain A, chain B
-  with chain B and so on, so it says something only when the prediction names
-  the chains the way the design does. A predictor has no reason to. On a
-  homotrimer it can label them in the opposite cyclic order, which no rotation
-  undoes, and the number then comes out large for a structure that matches.
-  scRMSD_chain covers one chain against that same chain and is free of it.
-  Read it for self consistency, and treat a large scRMSD_all on a
-  homo-oligomer as a question rather than an answer.
-
-  A helical bundle of this size is within reach of a prediction from the
-  sequence by itself, which a larger domain is not: msa_mode is
-  single_sequence here.
+  TiedPositions groups the n-th residue each selector picks, so the selectors
+  must pick matching residues on every chain. They do here because the chains
+  are exact crystallographic copies; check it on any other input.
 -->
 <ROSETTASCRIPTS>
 

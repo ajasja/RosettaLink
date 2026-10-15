@@ -1,59 +1,22 @@
 <!--
-  Binder design with everything the movers offer: RFdiffusion builds a de novo
-  binder against a fixed target chain, backbones without enough secondary
-  structure are dropped before any sequence is designed, LigandMPNN designs
-  the binder, ColabFold refolds the complex against a supplied alignment and
-  then refolds the binder on its own, and each surviving design is scored on
-  its interface, its surface and its hydrogen bonding.
+  Binder design using every option. Backbones with fewer than 3 helices or
+  strands are dropped before LigandMPNN; the complex is refolded with the
+  target's alignment, then the binder alone; each design is relaxed with its
+  backbone restrained, then scored on its interface, surface and hydrogen
+  bonds.
 
-      rosetta_link_scripts \
-          -parser:protocol examples/binder_design_advanced.xml \
-          -s examples/input_data/insulin_target.pdb \
-          -out:path output/binder_advanced
+      rosetta_link_scripts -parser:protocol examples/binder_design_advanced.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/binder_advanced
 
-  Run it from the repository root: existing_msa_file is relative to the
-  directory the run starts in. The work_dir of each stage is relative to
-  -out:path instead, so every stage's inputs and raw output are left beside
-  the designs.
+  or on a slurm cluster, from the repository root:
 
-  The contig keeps target chain B whole, then starts a new chain of 90 to 120
-  de novo residues. 2 backbones x 2 sequences = 4 designs, less whatever
-  min_ss rejects.
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/binder_design_advanced.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/binder_advanced
 
-  Each stage receives every pose of the stage before it, so the external
-  programs run once per stage rather than once per design.
-
-  What each piece is for
-
-  min_ss counts helices of 4 or more residues and strands of 3 or more over
-  the binder and rejects a backbone carrying fewer than 3 of them. It sits in
-  a FOR_EACH_POSE between the two stages, at confidence="1", so a rejected
-  backbone never reaches LigandMPNN. Raise num_helix_sheet to reject more; a
-  threshold at or below what the contig already produces rejects nothing.
-
-  predict_structure folds the complex against the target's alignment and none
-  for the binder, which has no homologues to align. existing_msa_file takes
-  one entry per chain in chain order, so the leading comma is chain A.
-
-  atoms picks what an RMSD measures over and superimposes on. The default,
-  ca, uses alpha carbons, so it reports the fold and says nothing about the
-  sidechains; heavy adds them. A design can score well on one and badly on
-  the other. bb, bb_o, all, sc and sc_heavy are the rest.
-
-  predict_only_binder folds the binder by itself. Its scRMSD says whether the
-  binder keeps its designed fold without the target holding it in place, and
-  replace_pose="false" keeps the complex as the structure that comes out.
-
-  relax settles the prediction into the Rosetta force field before the
-  interface is scored. Without it the energies read in the thousands, as the
-  clashes a predictor leaves behind swamp them, and hbonds_int reads zero.
-  hold_backbone restrains the backbone to where the predictor put it, so the
-  structure relaxes without drifting; the designs written out are the relaxed
-  ones, and the AF2 metrics above describe the prediction they came from.
-
-  analyse_interface, the simple metrics and the filters run in a FOR_EACH_POSE
-  so that every design is scored and not only the first. A mover placed in the
-  outer list instead would score one design and discard the rest.
+  Run from the repository root, which existing_msa_file is relative to.
+  scRMSD_binder_sidechains uses atoms="heavy"; the other RMSDs use CA.
 -->
 <ROSETTASCRIPTS>
 

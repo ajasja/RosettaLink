@@ -1,23 +1,16 @@
 <!--
-  Unconditional design: RFdiffusion builds backbones from nothing, LigandMPNN
-  designs a sequence for each, ColabFold refolds them.
+  Unconditional design: RFdiffusion builds 100-residue backbones from nothing,
+  LigandMPNN designs each, ColabFold refolds. 2 x 2 = 4 designs, no input.
 
-      rosetta_link_scripts \
-          -parser:protocol examples/unconditional_design.xml \
+      rosetta_link_scripts -parser:protocol examples/unconditional_design.xml \
           -out:path output/unconditional
 
-  No input structure: the contig names only de novo residues, so there is no
-  -s and no inference.input_pdb. 2 backbones x 2 sequences = 4 designs.
+  or on a slurm cluster, from the repository root:
 
-  Every residue is new, so rfd_new_backbone and rfd_all are the same set and
-  there is no rfd_fixed or rfd_motif.
-
-  Filters are left out on purpose. A filter in the PROTOCOLS list runs on the
-  primary pose only, so its column would be blank for every design but the
-  first. To score each one, wrap the filters in a MultiplePoseMover with a
-  nested ROSETTASCRIPTS; examples/general_example_with_per_pose_scoring.xml shows that. The
-  predictor metrics above need no wrapper: ColabFold attaches them to every
-  pose it produces.
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/unconditional_design.xml \
+          -out:path output/unconditional
 -->
 <ROSETTASCRIPTS>
 

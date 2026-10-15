@@ -48,7 +48,7 @@ Run the same protocol for real with `work_dir` set, then copy the outputs of
 each program into `fixtures/<name>/<program>/`:
 
 ```bash
-sbatch run_protocol.sh examples/redesign_colabfold.xml \
+CONDA_ENV=my_rosettalink_env sbatch run_protocol.sh examples/redesign_colabfold.xml \
     -s examples/input_data/insulin_target.pdb \
     -out:path output/record_redesign \
     --var num_sequences=2 --var work_dir=output/record_redesign
