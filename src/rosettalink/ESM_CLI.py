@@ -1,10 +1,6 @@
-# Uses model params as per HF_HOME env var:
-# export HF_HOME=.../shared_folder/software/hf_cache
-
 import argparse
 from Bio import SeqIO # To read fasta file
-from esm.models.esmfold2 import ESMFold2InputBuilder, EsmFold2Model, ProteinInput, StructurePredictionInput
-
+import os
 
 parser = argparse.ArgumentParser()
 
@@ -37,9 +33,26 @@ parser.add_argument(
     type=str,
     default="output_",
     help="Output filename prefix (default: 'output_').")
+parser.add_argument(
+    "--weights",
+    type=str,
+    default=None,
+    help="Path to model weights cache (HF_HUB_CACHE env var)."
+)
+parser.add_argument(
+    "--online",
+    action="store_true",
+    help="Download new model weights from Hugging Face Hub (do not set HF_HUB_OFFLINE=1). (Default: False)"
+)
+
 
 
 args = parser.parse_args()
+
+if args.weights:
+    os.environ["HF_HUB_CACHE"] = args.weights
+if not args.online:
+    os.environ["HF_HUB_OFFLINE"] = "1"
 
 def read_fasta_file(fasta_file):
     with open(fasta_file, "r") as file_handle:
@@ -50,6 +63,10 @@ def read_fasta_file(fasta_file):
 
 # Read fasta first, so exit early if bad seq
 sequences = read_fasta_file(args.fasta_file)
+
+# Must be imported after seting HF_HOME/HF_HUB_CACHE env var
+from esm.models.esmfold2 import ESMFold2InputBuilder, EsmFold2Model, ProteinInput, StructurePredictionInput
+
 
 model = EsmFold2Model.from_pretrained(args.model, device=args.device).eval()
 builder = ESMFold2InputBuilder()
