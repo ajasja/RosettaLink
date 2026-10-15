@@ -6,7 +6,7 @@
       rosetta_link_scripts \
           -parser:protocol examples/motif_scaffolding.xml \
           -s examples/input_data/5TPN.pdb \
-          -out:path output/motif
+          -out:path output/motif_scaffolding
 
   The contig keeps chain A residues 163 to 181, the RSV F site II helix, and
   builds 10 to 40 new residues on either side. 2 scaffolds x 2 sequences =
@@ -17,15 +17,7 @@
   refolded design. In binder design that contig labels no motif and the
   column stays blank.
 
-  fixed_selector holds the motif sequence, so LigandMPNN redesigns only the
-  scaffold around it.
 
-  Filters are left out on purpose. A filter in the PROTOCOLS list runs on the
-  primary pose only, so its column would be blank for every design but the
-  first. To score each one, wrap the filters in a MultiplePoseMover with a
-  nested ROSETTASCRIPTS; examples/general_example_with_per_pose_scoring.xml shows that. The
-  predictor metrics above need no wrapper: ColabFold attaches them to every
-  pose it produces.
 -->
 <ROSETTASCRIPTS>
 
@@ -43,7 +35,7 @@
 
         <LigandMPNN name="design_sequence"
             batch_size="2"
-            fixed_selector="rfd_motif"
+            design_selector="rfd_new_backbone"
             prefix_name="mpnn_"
             work_dir="02_ligandmpnn" />
 
