@@ -33,9 +33,7 @@
 # these structures have no correspondence to the input pose, reslabels and
 # RMSD metrics are skipped.
 
-import itertools
 import json
-import math
 import os
 import shutil
 from pathlib import Path
@@ -50,36 +48,19 @@ from rosettalink.decorators import register_mover
 from rosettalink.utils import get_run_command
 from rosettalink.utils import build_partial_a3m
 from rosettalink.utils import chain_letter
+from rosettalink.utils import match_chains
 from rosettalink.utils import parse_fasta_records
 from rosettalink.utils import pose_chain_sequences
 from rosettalink.utils import resolve_rmsd_atoms
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
+from rosettalink.utils import superimposed_rmsd
 from rosettalink.utils import work_dir
 import rosettalink.movers.BaseLinkMover as BaseLinkMover
-
-# Chains are paired with chains by trying every order, so the count has to
-# stay small. 6 chains is 720 orders.
-MAX_CHAIN_PAIRINGS = 720
-
 
 def _ca_coordinates(pose, resnums):
     """Alpha carbons of the residues given, as an array of rows."""
     return np.array([list(pose.residue(resnum).xyz("CA")) for resnum in resnums])
-
-
-def _superimposed_ca_rmsd(moved, fixed):
-    """RMSD between two equal length sets of coordinates, superimposed.
-
-    Scores one way of pairing chains against another. Rosetta's
-    superimpose_pose raises on two structures that sit exactly on top of each
-    other, which a pairing of a pose against itself does."""
-    moved = moved - moved.mean(axis=0)
-    fixed = fixed - fixed.mean(axis=0)
-    left, _, right = np.linalg.svd(moved.T @ fixed)
-    handedness = np.sign(np.linalg.det(left @ right))
-    rotation = left @ np.diag([1.0, 1.0, handedness]) @ right
-    return float(np.sqrt((((moved @ rotation) - fixed) ** 2).sum(axis=1).mean()))
 
 
 def _residue_map(mapping):
@@ -571,80 +552,49 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
             chains[index[letter]][1].append(resnum)
         return chains
 
-    def _chain_pairings(self, prediction, input_pose, folded_resnums):
-        """Every way of pairing the prediction's chains with the chains of the
-        pose it was folded from, as a {prediction resnum: pose resnum} map.
-
-        The identity pairing comes first. Chains pair only with chains of the
-        same sequence and length, so a complex of unlike chains has the
-        identity and nothing else."""
-        positions = list(range(1, prediction.total_residue() + 1))
-        predicted = self._chains_in_order(prediction, positions)
-        folded = self._chains_in_order(
-            input_pose, [folded_resnums[position - 1] for position in positions]
-        )
-        if len(predicted) != len(folded) or len(predicted) < 2:
-            return [dict(zip(positions, [folded_resnums[p - 1] for p in positions]))]
-        if math.factorial(len(predicted)) > MAX_CHAIN_PAIRINGS:
-            self.tracer_warning << (
-                f"Not matching chains: {len(predicted)} of them is too many to "
-                f"pair exhaustively\n"
-            ) and self.tracer_warning.flush()
-            return [dict(zip(positions, [folded_resnums[p - 1] for p in positions]))]
-
-        def sequence(pose, resnums):
-            return "".join(pose.residue(resnum).name1() for resnum in resnums)
-
-        folded_sequences = [sequence(input_pose, members) for _, members in folded]
-
-        pairings = []
-        for order in itertools.permutations(range(len(folded))):
-            # Only chains the pose holds twice can trade places, and a chain
-            # pairs only with one the prediction gave the same length.
-            if any(
-                folded_sequences[order[i]] != folded_sequences[i]
-                or len(predicted[i][1]) != len(folded[order[i]][1])
-                for i in range(len(order))
-            ):
-                continue
-            mapping = {}
-            for i, j in enumerate(order):
-                mapping.update(zip(predicted[i][1], folded[j][1]))
-            pairings.append((order == tuple(range(len(folded))), order, mapping))
-        # The identity first, so an equal score keeps the chains as named.
-        pairings.sort(key=lambda entry: not entry[0])
-        return [mapping for _, _, mapping in pairings] or [
-            dict(zip(positions, [folded_resnums[p - 1] for p in positions]))
-        ]
-
     def _matched_chain_mapping(self, prediction, input_pose, folded_resnums):
         """The {prediction resnum: pose resnum} map that fits best, or None
         when the chains are already paired as named.
 
         A predictor names the chains of a homo-oligomer in whatever order it
         likes, and residue i of chain A is then compared against a different
-        chain of the pose."""
-        pairings = self._chain_pairings(prediction, input_pose, folded_resnums)
-        if len(pairings) < 2:
+        chain of the pose. Chains pair only with chains of the same sequence
+        and length; see utils.match_chains."""
+        positions = list(range(1, prediction.total_residue() + 1))
+        predicted = self._chains_in_order(prediction, positions)
+        folded = self._chains_in_order(
+            input_pose, [folded_resnums[position - 1] for position in positions]
+        )
+        if len(predicted) != len(folded) or len(predicted) < 2:
             return None
 
-        def score(mapping):
-            pairs = sorted(mapping.items())
-            return _superimposed_ca_rmsd(
+        order = match_chains(
+            [_ca_coordinates(prediction, members) for _, members in predicted],
+            [_ca_coordinates(input_pose, members) for _, members in folded],
+            ["".join(input_pose.residue(resnum).name1() for resnum in members)
+             for _, members in folded],
+        )
+        if order == list(range(len(folded))):
+            return None
+
+        mapping = {}
+        for i, j in enumerate(order):
+            mapping.update(zip(predicted[i][1], folded[j][1]))
+
+        def score(pairs):
+            pairs = sorted(pairs.items())
+            return superimposed_rmsd(
                 _ca_coordinates(prediction, [position for position, _ in pairs]),
                 _ca_coordinates(input_pose, [resnum for _, resnum in pairs]),
             )
 
-        scores = [score(mapping) for mapping in pairings]
-        best = min(range(len(scores)), key=lambda i: scores[i])
-        if best == 0:
-            return None
+        as_named = dict(zip(positions, [folded_resnums[p - 1] for p in positions]))
         self.tracer_info << (
             f"Chains of the prediction match the pose in another order: "
-            f"CA RMSD {scores[0]:.2f} as named, {scores[best]:.2f} matched. "
+            f"CA RMSD {score(as_named):.2f} as named, {score(mapping):.2f} matched. "
             f"Measuring every RMSD on the matched chains\n"
         ) and self.tracer_info.flush()
-        return pairings[best]
+        return mapping
 
     @staticmethod
     def _selected_positions(pose, selector):

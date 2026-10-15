@@ -102,19 +102,8 @@ def test_chains_of_unlike_length_are_never_paired(mover, trimer, tmp_path):
 	uneven = pyrosetta.pose_from_file(str(path))
 
 	folded = list(range(1, uneven.total_residue() + 1))
-	pairings = mover._chain_pairings(uneven, uneven, folded)
 
-	assert len(pairings) == 1
-
-
-def test_a_homotrimer_offers_every_order(mover, trimer):
-	folded = list(range(1, trimer.total_residue() + 1))
-
-	pairings = mover._chain_pairings(trimer, trimer, folded)
-
-	assert len(pairings) == 6
-	# The identity comes first, so an equal fit keeps the chains as named.
-	assert pairings[0] == dict(zip(folded, folded))
+	assert mover._matched_chain_mapping(uneven, uneven, folded) is None
 
 
 def test_match_chains_is_on_unless_the_tag_turns_it_off(mover):

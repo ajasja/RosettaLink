@@ -232,6 +232,77 @@ def resolve_rmsd_atoms(atoms):
     return getattr(rmsd_atoms, enum_name)
 
 
+def superimpose(moved, fixed):
+    """Rotation and translation placing `moved` onto `fixed`, two equal length
+    arrays of coordinates, as `moved @ rotation + translation`."""
+    import numpy as np
+
+    moved_centre = moved.mean(axis=0)
+    fixed_centre = fixed.mean(axis=0)
+    left, _, right = np.linalg.svd((moved - moved_centre).T @ (fixed - fixed_centre))
+    handedness = np.sign(np.linalg.det(left @ right))
+    rotation = left @ np.diag([1.0, 1.0, handedness]) @ right
+    return rotation, fixed_centre - moved_centre @ rotation
+
+
+def superimposed_rmsd(moved, fixed):
+    """RMSD between two equal length arrays of coordinates, superimposed."""
+    import numpy as np
+
+    rotation, translation = superimpose(moved, fixed)
+    return float(np.sqrt((((moved @ rotation + translation) - fixed) ** 2).sum(axis=1).mean()))
+
+
+def match_chains(predicted, reference, kinds):
+    """Pairs each chain of a prediction with a chain of the reference.
+
+    `predicted` and `reference` hold one array of CA coordinates per chain,
+    chain i of one being the chain of the same name in the other. Chain i of
+    the prediction may pair with chain j of the reference only when
+    `kinds[i] == kinds[j]` and the two have the same length.
+
+    Each prediction chain that may pair with reference chain 0 is tried as an
+    anchor: the prediction is superimposed on reference chain 0 through that
+    chain alone, its chains are paired one to one with the reference chains
+    so that the summed distance between their centres is least, and the
+    pairing is scored by the CA RMSD of the whole complex superimposed.
+
+    Returns the best scoring pairing as a list whose element i is the
+    reference chain paired with prediction chain i. The chains as named win
+    a tie within rounding, and are returned unchanged when they cannot pair
+    as named."""
+    import numpy as np
+    from scipy.optimize import linear_sum_assignment
+
+    count = len(reference)
+    identity = list(range(count))
+    allowed = np.array([
+        [kinds[i] == kinds[j] and len(predicted[i]) == len(reference[j]) for j in range(count)]
+        for i in range(count)
+    ])
+    if len(predicted) != count or not allowed.diagonal().all():
+        return identity
+
+    whole_prediction = np.concatenate(predicted)
+    predicted_centres = np.array([chain.mean(axis=0) for chain in predicted])
+    reference_centres = np.array([chain.mean(axis=0) for chain in reference])
+
+    def score(order):
+        return superimposed_rmsd(whole_prediction, np.concatenate([reference[j] for j in order]))
+
+    best, best_score = identity, score(identity)
+    for anchor in np.flatnonzero(allowed[:, 0]):
+        rotation, translation = superimpose(predicted[anchor], reference[0])
+        centres = predicted_centres @ rotation + translation
+        distances = np.linalg.norm(centres[:, None] - reference_centres[None], axis=2)
+        _, order = linear_sum_assignment(np.where(allowed, distances, np.inf))
+        order = order.tolist()
+        order_score = score(order)
+        if order_score < best_score and not np.isclose(order_score, best_score):
+            best, best_score = order, order_score
+    return best
+
+
 # Directory a relative work_dir is kept under. rosetta_link_scripts sets it
 # to the run's output directory; without it a relative work_dir lands in the
 # directory the run started from.
