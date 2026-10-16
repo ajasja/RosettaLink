@@ -3,8 +3,10 @@
   F site II helix (5TPN A163-181), LigandMPNN designs the scaffold holding the
   motif sequence, ColabFold refolds. 2 x 2 = 4 designs.
 
-      rosetta_link_scripts -parser:protocol examples/motif_scaffolding.xml \
-          -s examples/input_data/5TPN.pdb -out:path output/motif
+      rosetta_link_scripts \
+          -parser:protocol examples/motif_scaffolding.xml \
+          -s examples/input_data/5TPN.pdb \
+          -out:path output/motif_scaffolding
 
   or on a slurm cluster, from the repository root:
 
@@ -31,7 +33,7 @@
 
         <LigandMPNN name="design_sequence"
             batch_size="2"
-            fixed_selector="rfd_motif"
+            design_selector="rfd_new_backbone"
             prefix_name="mpnn_"
             work_dir="02_ligandmpnn" />
 

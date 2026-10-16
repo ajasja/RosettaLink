@@ -5,8 +5,11 @@
   backbone restrained, then scored on its interface, surface and hydrogen
   bonds.
 
-      rosetta_link_scripts -parser:protocol examples/binder_design_advanced.xml \
-          -s examples/input_data/insulin_target.pdb -out:path output/binder_advanced
+  rosetta_link_scripts \
+          -parser:protocol examples/binder_design_advanced.xml \
+          -corrections::beta_nov16 \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/binder_design_advanced
 
   or on a slurm cluster, from the repository root:
 
@@ -17,12 +20,16 @@
 
   Run from the repository root, which existing_msa_file is relative to.
   scRMSD_binder_sidechains uses atoms="heavy"; the other RMSDs use CA.
+
+  The contig keeps target chain B whole, then starts a new chain of 90 to 120
+  de novo residues. 2 backbones x 2 sequences = 4 designs, less whatever
+  min_ss rejects.
 -->
 <ROSETTASCRIPTS>
 
     <SCOREFXNS>
-        <ScoreFunction name="sfxn" weights="ref2015" />
-        <ScoreFunction name="sfxn_cst" weights="ref2015">
+        <ScoreFunction name="sfxn" weights="beta_nov16" />
+        <ScoreFunction name="sfxn_cst" weights="beta_nov16">
             <Reweight scoretype="coordinate_constraint" weight="1.0" />
         </ScoreFunction>
     </SCOREFXNS>
@@ -95,15 +102,17 @@
             coord_dev="0.5"
             bb_only="true" />
 
-        <FastRelax name="relax" scorefxn="sfxn_cst" repeats="1" />
+        
+        <MinMover name="minimize_sc_all" scorefxn="sfxn" bb="0" chi="1" />
+        <MinMover name="minimize_all" scorefxn="sfxn_cst" bb="1" chi="1" />
 
         <InterfaceAnalyzerMover name="analyse_interface"
             interface="A_B"
             scorefxn="sfxn"
-            pack_separated="true"
+            pack_separated="false"
             packstat="true"
             interface_sc="true"
-            scorefile_reporting_prefix="iface" />
+            scorefile_reporting_prefix="if_" />
     </MOVERS>
 
     <FILTERS>
@@ -134,8 +143,9 @@
         <Add mover="predict_structure" />
         <Add mover="predict_only_binder" />
         <FOR_EACH_POSE><PROTOCOLS>
+            <Add mover="minimize_sc_all" />
             <Add mover="hold_backbone" />
-            <Add mover="relax" />
+            <Add mover="minimize_all" />
             <Add mover="analyse_interface" />
             <Add metrics="sap_score" />
             <Add filter="apolar_segment" />

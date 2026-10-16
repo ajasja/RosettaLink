@@ -3,8 +3,10 @@
   chain B, LigandMPNN designs the binder, ColabFold refolds the complex and
   then the binder alone. 2 backbones x 2 sequences = 4 designs.
 
-      rosetta_link_scripts -parser:protocol examples/binder_design.xml \
-          -s examples/input_data/insulin_target.pdb -out:path output/binder
+      rosetta_link_scripts \
+          -parser:protocol examples/binder_design.xml \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/binder_design
 
   or on a slurm cluster, from the repository root:
 
@@ -47,9 +49,11 @@
             prefix_name="AF2_"
             replace_pose="true"
             work_dir="03_colabfold">
+
             <RMSD name="scRMSD"  />
             <RMSD name="scRMSD_binder" calculation_selector="rfd_new_backbone" />
             <RMSD name="scRMSD_binder_on_fixed" calculation_selector="rfd_new_backbone" alignment_selector="rfd_fixed" />
+    
             <metric name="plddt_all" base_metric="pLDDT" />
             <metric name="plddt_binder" base_metric="pLDDT" selector="rfd_new_backbone" />
             <metric name="pAE_binder" base_metric="pAE" selector="rfd_new_backbone" />
@@ -61,6 +65,7 @@
             subset_selector="rfd_new_backbone"
             prefix_name="AF2_only_binder_"
             replace_pose="false">
+
             <RMSD name="scRMSD"  />
             <metric name="plddt" base_metric="pLDDT" />
         </ColabFold>
