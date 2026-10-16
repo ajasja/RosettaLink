@@ -15,6 +15,8 @@ pytest.importorskip("pyrosetta", reason="the integration tests need PyRosetta")
 
 from pathlib import Path
 
+from rosettalink.utils import matched_chain_mapping
+
 ROOT = Path(__file__).resolve().parents[2]
 TRIMER = ROOT / "examples" / "input_data" / "coiled_coil_trimer.pdb"
 
@@ -63,7 +65,7 @@ def test_a_prediction_with_two_chains_exchanged_is_paired_back(mover, trimer, tm
 	swapped = reordered(trimer, (1, 3, 2), tmp_path)
 	folded = list(range(1, trimer.total_residue() + 1))
 
-	matched = mover._matched_chain_mapping(swapped, trimer, folded)
+	matched = matched_chain_mapping(swapped, trimer, folded, mover.tracer_info)
 
 	assert matched is not None
 	# Chain B of the prediction holds what chain C of the pose holds.
@@ -75,7 +77,7 @@ def test_the_chains_as_named_are_kept_when_they_already_fit(mover, trimer, tmp_p
 	same = reordered(trimer, (1, 2, 3), tmp_path)
 	folded = list(range(1, trimer.total_residue() + 1))
 
-	assert mover._matched_chain_mapping(same, trimer, folded) is None
+	assert matched_chain_mapping(same, trimer, folded, mover.tracer_info) is None
 
 
 def test_matching_leaves_both_poses_alone(mover, trimer, tmp_path):
@@ -83,7 +85,7 @@ def test_matching_leaves_both_poses_alone(mover, trimer, tmp_path):
 	folded = list(range(1, trimer.total_residue() + 1))
 	before = chains_of(swapped), swapped.sequence(), chains_of(trimer), trimer.sequence()
 
-	mover._matched_chain_mapping(swapped, trimer, folded)
+	matched_chain_mapping(swapped, trimer, folded, mover.tracer_info)
 
 	assert (chains_of(swapped), swapped.sequence(),
 	        chains_of(trimer), trimer.sequence()) == before
@@ -103,7 +105,7 @@ def test_chains_of_unlike_length_are_never_paired(mover, trimer, tmp_path):
 
 	folded = list(range(1, uneven.total_residue() + 1))
 
-	assert mover._matched_chain_mapping(uneven, uneven, folded) is None
+	assert matched_chain_mapping(uneven, uneven, folded, mover.tracer_info) is None
 
 
 def test_match_chains_is_on_unless_the_tag_turns_it_off(mover):

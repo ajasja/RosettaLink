@@ -35,6 +35,7 @@ rosetta_link_scripts \
 | `sequence_redesign.xml` | `redesign_target.pdb` | redesign one chain of an existing complex |
 | `general_example_with_per_pose_scoring.xml` | `insulin_target.pdb` | the full pipeline, scoring every design |
 | `colabfold_predict.xml` | any structure | refold one structure, no design |
+| `esmfold2_predict.xml` | any structure | refold one structure with ESMFold2, no design |
 | `redesign_colabfold.xml` | any structure | redesign a sequence and refold it |
 
 `unconditional_design.xml` takes no `-s` at all, since its contig names only
