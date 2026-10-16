@@ -182,7 +182,7 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         pdb_info = pose.pdb_info()
         if pdb_info is None:
             return ""
-        return ",".join(
+        return " ".join(
             f"{pdb_info.chain(resnum)}{pdb_info.number(resnum)}"
             for resnum in range(1, pose.total_residue() + 1)
             if selected[resnum]
