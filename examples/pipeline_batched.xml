@@ -1,28 +1,18 @@
 <!--
-  Binder design, every stage batched.
+  Binder design, then two filters run on every design in a FOR_EACH_POSE.
+  2 x 2 = 4 designs.
 
-      rosetta_link_scripts \
-          -parser:protocol examples/pipeline_batched.xml \
-          -s examples/input_data/insulin_target.pdb \
-          -out:path output/pipeline
+      rosetta_link_scripts -parser:protocol examples/pipeline_batched.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/pipeline
 
-  Each mover takes every pose the previous one published and hands its own
-  results on, so LigandMPNN and ColabFold each run once for the whole
-  fan out instead of once per pose:
+  or on a slurm cluster, from the repository root:
 
-      make_backbone      1 target       to  N backbones
-      make_sequence      N backbones    to  N*M sequences    (one invocation)
-      predict_structure  N*M sequences  to  N*M predictions  (one invocation)
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/pipeline_batched.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/pipeline
 
-  run_command is set on no tag, so each comes from the matching section of
-  rosettalink.config.yaml.
-
-  The filters run inside FOR_EACH_POSE, so every design gets a column rather
-  than only the first. That needs a PyRosetta build carrying
-  RosettaCommons/rosetta pull request 494.
-
-  Each stage keeps its work_dir, relative to -out:path, so the raw output of
-  each tool lands beside the designs.
+  No prefix_name is set, so the selectors name the unprefixed labels.
 -->
 <ROSETTASCRIPTS>
 

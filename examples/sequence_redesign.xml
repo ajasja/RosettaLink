@@ -1,31 +1,19 @@
 <!--
-  Sequence redesign: LigandMPNN designs new sequences for one chain of an
-  existing complex, holding the other chain, and ColabFold refolds each.
+  Sequence redesign: LigandMPNN redesigns chain A, a 64-residue binder,
+  holding chain B; ColabFold refolds each of the 4 sequences.
 
-      rosetta_link_scripts \
-          -parser:protocol examples/sequence_redesign.xml \
-          -s examples/input_data/redesign_target.pdb \
-          -out:path output/redesign
+      rosetta_link_scripts -parser:protocol examples/sequence_redesign.xml \
+          -s examples/input_data/redesign_target.pdb -out:path output/redesign
 
-  No RFdiffusion: the backbone is the one that came in. chains_to_design
-  restricts LigandMPNN to chain A, the 64 residue binder, leaving chain B
-  untouched. 4 sequences in one invocation.
+  or on a slurm cluster, from the repository root:
 
-  A structure read from a pdb carries no reslabels, so AddResidueLabel stamps
-  the two the metrics select on before anything else runs. LigandMPNN carries
-  them onto every design and ColabFold onto every prediction.
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/sequence_redesign.xml \
+          -s examples/input_data/redesign_target.pdb -out:path output/redesign
 
-  scRMSD_redesigned superimposes on the redesigned chain and reports whether
-  the new sequence folds to the backbone it was designed for;
-  scRMSD_redesigned_on_target superimposes on the held chain instead and
-  reports whether it also stays in place against it.
-
-  Filters are left out on purpose. A filter in the PROTOCOLS list runs on the
-  primary pose only, so its column would be blank for every design but the
-  first. To score each one, wrap the filters in a MultiplePoseMover with a
-  nested ROSETTASCRIPTS; examples/general_example_with_per_pose_scoring.xml shows that. The
-  predictor metrics above need no wrapper: ColabFold attaches them to every
-  pose it produces.
+  A pdb carries no reslabels, so AddResidueLabel stamps the ones the metrics
+  select on before anything runs.
 -->
 <ROSETTASCRIPTS>
 
@@ -42,7 +30,7 @@
 
         <LigandMPNN name="design_sequence"
             batch_size="4"
-            chains_to_design="A"
+            design_selector="chain_a"
             prefix_name="mpnn_"
             work_dir="01_ligandmpnn" />
 

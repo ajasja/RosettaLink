@@ -1,30 +1,19 @@
 <!--
-  The full pipeline with filters and simple metrics applied to every design
-  rather than only the first. This is the one to copy when a protocol needs
-  per pose scoring.
+  Binder design with every design scored without FOR_EACH_POSE: the filters
+  and a simple metric run inside a MultiplePoseMover. 2 x 2 = 4 designs.
 
-      rosetta_link_scripts \
-          -parser:protocol examples/general_example_with_per_pose_scoring.xml \
-          -s examples/input_data/insulin_target.pdb \
-          -out:path output/per_pose
+      rosetta_link_scripts -parser:protocol examples/general_example_with_per_pose_scoring.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/per_pose
 
-  num_designs x batch_size structures come out: 2 x 2 = 4 here. Any value in
-  a protocol can be written as a name in curly braces and supplied with -var instead
-  of being hardcoded, which is how the same file serves several runs.
+  or on a slurm cluster, from the repository root:
 
-  A filter in the outer PROTOCOLS list runs on the primary pose only, so its
-  column would be blank for every design but the first. Wrapping the scoring
-  stage in a MultiplePoseMover applies it to each one. The predictor metrics
-  need no wrapper, since ColabFold attaches those to every pose it produces.
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/general_example_with_per_pose_scoring.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/per_pose
 
-  A nested ROSETTASCRIPTS has its own parse scope: the score function, the
-  selector, the filters and the simple metric used inside it are declared
-  again there and cannot be shared with the outer script. Change one and
-  change the other.
-
-  binder_design_advanced.xml writes the same per design scoring with
-  FOR_EACH_POSE, which needs a PyRosetta build carrying
-  RosettaCommons/rosetta pull request 494.
+  The nested ROSETTASCRIPTS cannot see the outer declarations, so the score
+  function, selector, filters and metric are declared again inside it.
 -->
 <ROSETTASCRIPTS>
 

@@ -1,0 +1,66 @@
+<!--
+  C3 homo-oligomer from scratch: RFdiffusion builds a symmetric 3 x 60
+  backbone, LigandMPNN gives the three chains one sequence by tying them
+  position by position, ColabFold refolds it. 2 x 2 = 4 designs, no input.
+
+      rosetta_link_scripts -parser:protocol examples/homo_oligomer_design.xml \
+          -out:path output/homo_oligomer
+
+  or on a slurm cluster, from the repository root:
+
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/homo_oligomer_design.xml \
+          -out:path output/homo_oligomer
+
+  Under RFdiffusion's symmetry config the contig is the total length, as a
+  range, and the override goes before the config-name flag. TiedPositions, not
+  homo_oligomer, since RFdiffusion numbers the chains continuously. It takes
+  one pose per run, hence the FOR_EACH_POSE.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <Chain name="chain_A" chains="A" />
+        <Chain name="chain_B" chains="B" />
+        <Chain name="chain_C" chains="C" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <RFdiffusion name="design_backbone"
+            contig="[180-180]"
+            num_designs="2"
+            extra_args="inference.symmetry=c3 --config-name symmetry"
+            prefix_name="rfd_"
+            work_dir="01_rfdiff" />
+
+        <LigandMPNN name="design_sequence"
+            batch_size="2"
+            temperature="0.3"
+            prefix_name="mpnn_"
+            work_dir="02_ligandmpnn">
+            <TiedPositions residues_selectors="chain_A,chain_B,chain_C" />
+        </LigandMPNN>
+
+        <ColabFold name="predict_structure"
+            models="1,2"
+            msa_mode="single_sequence"
+            prefix_name="AF2_"
+            replace_pose="true"
+            work_dir="03_colabfold">
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_chain" calculation_selector="chain_A" />
+            <metric name="plddt_all" base_metric="pLDDT" />
+            <metric name="pAE_all" base_metric="pAE" />
+        </ColabFold>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add mover="design_sequence" />
+            <Add mover="predict_structure" />
+        </PROTOCOLS></FOR_EACH_POSE>
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

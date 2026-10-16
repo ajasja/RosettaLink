@@ -1,24 +1,18 @@
 <!--
-  Refold an input structure with ColabFold and report its confidence and a
-  self-consistency RMSD against the structure it was handed.
+  Refolds an input structure with ColabFold and reports the RMSD against it.
 
-      rosetta_link_scripts \
-          -parser:protocol examples/colabfold_predict.xml \
-          -s examples/input_data/insulin_target.pdb \
-          -out:path output/colabfold_predict
+      rosetta_link_scripts -parser:protocol examples/colabfold_predict.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/colabfold_predict
 
-  ColabFold reads its run_command from the ColabFold section of
-  rosettalink.config.yaml. Set run_command on the tag to override it.
+  or on a slurm cluster, from the repository root:
 
-  msa_mode="single_sequence" needs no MSA server and makes this quick, at the
-  cost of accuracy: refolding a natural sequence this way gives a low pLDDT
-  and a large RMSD. Use an mmseqs2 mode for a prediction to rely on.
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/colabfold_predict.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/colabfold_predict
 
-  An RMSD tag with no calculation_selector measures every residue, so this
-  protocol needs no reslabels of its own. An input read from a pdb carries
-  none, unlike a pose coming from RFdiffusion or LigandMPNN; to measure over
-  part of one, stamp a label with AddResidueLabel and select on it, as
-  examples/sequence_redesign.xml does.
+  single_sequence needs no MSA server but predicts a natural sequence poorly;
+  use an mmseqs2 mode for a prediction to rely on.
 -->
 <ROSETTASCRIPTS>
 

@@ -1,29 +1,29 @@
 <!--
-  Binder design with everything the movers offer: RFdiffusion builds a de novo
-  binder against a fixed target chain, backbones without enough secondary
-  structure are dropped before any sequence is designed, LigandMPNN designs
-  the binder, ColabFold refolds the complex against a supplied alignment and
-  then refolds the binder on its own, and each surviving design is scored on
-  its interface, its surface and its hydrogen bonding.
+  Binder design using every option. Backbones with fewer than 3 helices or
+  strands are dropped before LigandMPNN; the complex is refolded with the
+  target's alignment, then the binder alone; each design is relaxed with its
+  backbone restrained, then scored on its interface, surface and hydrogen
+  bonds.
 
-      rosetta_link_scripts \
+  rosetta_link_scripts \
           -parser:protocol examples/binder_design_advanced.xml \
           -corrections::beta_nov16 \
           -s examples/input_data/insulin_target.pdb \
           -out:path output/binder_design_advanced
 
-  Run it from the repository root: existing_msa_file is relative to the
-  directory the run starts in. The work_dir of each stage is relative to
-  -out:path instead, so every stage's inputs and raw output are left beside
-  the designs.
+  or on a slurm cluster, from the repository root:
+
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/binder_design_advanced.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/binder_advanced
+
+  Run from the repository root, which existing_msa_file is relative to.
+  scRMSD_binder_sidechains uses atoms="heavy"; the other RMSDs use CA.
 
   The contig keeps target chain B whole, then starts a new chain of 90 to 120
   de novo residues. 2 backbones x 2 sequences = 4 designs, less whatever
   min_ss rejects.
-
-  Each stage receives every pose of the stage before it, so the external
-  programs run once per stage rather than once per design.
-  
 -->
 <ROSETTASCRIPTS>
 

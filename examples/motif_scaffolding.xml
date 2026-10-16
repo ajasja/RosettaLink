@@ -1,23 +1,21 @@
 <!--
-  Motif scaffolding: RFdiffusion builds a new scaffold around a motif taken
-  from an input structure, LigandMPNN designs the scaffold while holding the
-  motif sequence, ColabFold refolds the result.
+  Motif scaffolding: RFdiffusion builds 10-40 residues either side of the RSV
+  F site II helix (5TPN A163-181), LigandMPNN designs the scaffold holding the
+  motif sequence, ColabFold refolds. 2 x 2 = 4 designs.
 
       rosetta_link_scripts \
           -parser:protocol examples/motif_scaffolding.xml \
           -s examples/input_data/5TPN.pdb \
           -out:path output/motif_scaffolding
 
-  The contig keeps chain A residues 163 to 181, the RSV F site II helix, and
-  builds 10 to 40 new residues on either side. 2 scaffolds x 2 sequences =
-  4 designs.
+  or on a slurm cluster, from the repository root:
 
-  This is the protocol where rfd_motif is non empty, so scRMSD_motif is the
-  metric that matters: it says whether the motif kept its geometry in the
-  refolded design. In binder design that contig labels no motif and the
-  column stays blank.
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/motif_scaffolding.xml \
+          -s examples/input_data/5TPN.pdb -out:path output/motif
 
-
+  scRMSD_motif says whether the motif kept its geometry.
 -->
 <ROSETTASCRIPTS>
 

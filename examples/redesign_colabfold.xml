@@ -1,23 +1,18 @@
 <!--
-  Redesign the sequence of an input structure with LigandMPNN, then refold
-  every design with ColabFold and report a self-consistency RMSD against the
-  backbone the sequence was designed for.
+  Redesigns the sequence of an input structure with LigandMPNN and refolds
+  both designs with ColabFold.
 
-      rosetta_link_scripts \
-          -parser:protocol examples/redesign_colabfold.xml \
-          -s examples/input_data/insulin_target.pdb \
-          -out:path output/redesign
+      rosetta_link_scripts -parser:protocol examples/redesign_colabfold.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/redesign
 
-  Each stage receives every design of the stage before it, so ColabFold folds
-  all of them in a single invocation instead of one per sequence. batch_size
-  sets how many sequences are designed, so this protocol produces two output
-  structures. Each stage keeps its work_dir, relative to -out:path.
+  or on a slurm cluster, from the repository root:
 
-  from_input is stamped before anything runs, so it tracks whether a reslabel
-  survives being written to disk and read back by both tools.
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/redesign_colabfold.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/redesign
 
-  Neither mover carries a run_command here, so both come from
-  rosettalink.config.yaml.
+  from_input is stamped first, to check that a reslabel survives both tools.
 -->
 <ROSETTASCRIPTS>
 

@@ -1,0 +1,75 @@
+<!--
+  Symmetry redesign: LigandMPNN redesigns the interface core of a coiled-coil
+  homotrimer (Lpp-56, assembly 1 of PDB 1KFM) with the three chains tied, so
+  they keep one sequence; ColabFold refolds. 2 designs.
+
+      rosetta_link_scripts -parser:protocol examples/symmetry_redesign.xml \
+          -s examples/input_data/coiled_coil_trimer.pdb -out:path output/symmetry_redesign
+
+  or on a slurm cluster, from the repository root:
+
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/symmetry_redesign.xml \
+          -s examples/input_data/coiled_coil_trimer.pdb -out:path output/symmetry_redesign
+
+  TiedPositions groups the n-th residue each selector picks, so the selectors
+  must pick matching residues on every chain. They do here because the chains
+  are exact crystallographic copies; check it on any other input.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <Chain name="chain_A" chains="A" />
+        <Chain name="chain_B" chains="B" />
+        <Chain name="chain_C" chains="C" />
+
+        <Not name="not_chain_A" selector="chain_A" />
+        <Not name="not_chain_B" selector="chain_B" />
+        <Not name="not_chain_C" selector="chain_C" />
+
+        <Neighborhood name="facing_A" selector="not_chain_A"
+                      distance="6.0" include_focus_in_subset="false" />
+        <Neighborhood name="facing_B" selector="not_chain_B"
+                      distance="6.0" include_focus_in_subset="false" />
+        <Neighborhood name="facing_C" selector="not_chain_C"
+                      distance="6.0" include_focus_in_subset="false" />
+
+        <And name="interface_A" selectors="chain_A,facing_A" />
+        <And name="interface_B" selectors="chain_B,facing_B" />
+        <And name="interface_C" selectors="chain_C,facing_C" />
+
+        <Or name="interface" selectors="interface_A,interface_B,interface_C" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <LigandMPNN name="design_sequence"
+            batch_size="2"
+            temperature="0.3"
+            design_selector="interface"
+            prefix_name="mpnn_"
+            work_dir="01_ligandmpnn">
+            <TiedPositions residues_selectors="interface_A,interface_B,interface_C" />
+        </LigandMPNN>
+
+        <ColabFold name="predict_structure"
+            models="1,2"
+            msa_mode="single_sequence"
+            prefix_name="AF2_"
+            replace_pose="true"
+            work_dir="02_colabfold">
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_chain" calculation_selector="chain_A" />
+            <RMSD name="scRMSD_interface" calculation_selector="interface" />
+            <metric name="plddt_all" base_metric="pLDDT" />
+            <metric name="plddt_interface" base_metric="pLDDT" selector="interface" />
+            <metric name="pAE_all" base_metric="pAE" />
+        </ColabFold>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_sequence" />
+        <Add mover="predict_structure" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

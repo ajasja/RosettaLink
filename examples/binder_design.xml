@@ -1,16 +1,22 @@
 <!--
-  Binder design: RFdiffusion builds a de novo binder against a fixed target
-  chain, LigandMPNN designs sequences for the binder only, ColabFold refolds
-  the complex.
+  Binder design: RFdiffusion builds a 90-120 residue binder against target
+  chain B, LigandMPNN designs the binder, ColabFold refolds the complex and
+  then the binder alone. 2 backbones x 2 sequences = 4 designs.
 
       rosetta_link_scripts \
           -parser:protocol examples/binder_design.xml \
           -s examples/input_data/insulin_target.pdb \
           -out:path output/binder_design
 
-  The contig keeps target chain B whole, then starts a new chain of 90 to 120
-  de novo residues. 2 backbones x 2 sequences = 4 designs.
+  or on a slurm cluster, from the repository root:
 
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/binder_design.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/binder
+
+  The complex is folded with the target's alignment and none for the binder:
+  existing_msa_file has one entry per chain, so the leading comma is chain A.
 -->
 
 <ROSETTASCRIPTS>
@@ -30,7 +36,8 @@
          />
 
         <LigandMPNN name="design_sequence"
-            design_selector="rfd_new_backbone" 
+            batch_size="2"
+            design_selector="rfd_new_backbone"
             prefix_name="mpnn_"
             work_dir="02_ligandmpnn" />
 
@@ -56,7 +63,6 @@
             models="1,2"
             msa_mode="single_sequence"
             subset_selector="rfd_new_backbone"
-
             prefix_name="AF2_only_binder_"
             replace_pose="false">
 
