@@ -1,6 +1,7 @@
 import argparse
 from Bio import SeqIO # To read fasta file
 import os
+import json
 
 parser = argparse.ArgumentParser()
 
@@ -78,8 +79,6 @@ sequences = read_fasta_file(args.fasta_file)
 from esm.models.esmfold2 import ESMFold2InputBuilder, EsmFold2Model, ProteinInput, StructurePredictionInput
 from esm.utils.msa import MSA
 
-print("After importing esm and msa?")
-
 def match_msa_to_sequence(msa, sequence, record_id):
     """Return an MSA whose columns line up with the (possibly colon-joined) sequence.
 
@@ -128,4 +127,11 @@ for i, record in enumerate(sequences):
     print(f"pLDDT {float(result.plddt.mean()):.3f}   pTM {float(result.ptm):.3f}")
     with open(outname, "w") as f:
         f.write(result.complex.to_mmcif())
+    with open(f"{args.output_prefix}{i}_scores.json", "w") as f:
+        json.dump({
+            "plddt": result.plddt.float().tolist(),  # per token, 0-1
+            "pae": result.pae.float().tolist() if result.pae is not None else None,  # [L, L], Angstrom
+            "ptm": result.ptm,
+            "iptm": result.iptm,
+        }, f)
 
