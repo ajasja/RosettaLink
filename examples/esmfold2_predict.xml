@@ -1,0 +1,33 @@
+<!--
+  Refolds an input structure with ESMFold2 and reports the RMSD against it.
+
+      rosetta_link_scripts -parser:protocol examples/esmfold2_predict.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/esmfold2_predict
+
+  or on a slurm cluster, from the repository root:
+
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/esmfold2_predict.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output/esmfold2_predict
+
+  ESM_CLI.py folds with biohub/ESMFold2-Fast from the sequence alone unless
+  extra_args picks another model. pLDDT is reported on 0-1, not 0-100.
+-->
+<ROSETTASCRIPTS>
+
+    <MOVERS>
+
+        <ESMFold2 name="predict_structure"
+            prefix_name="ESMFold2_"
+            replace_pose="1"
+            work_dir="01_esmfold2">
+            <RMSD name="scRMSD_all" />
+        </ESMFold2>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="predict_structure" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
