@@ -2,16 +2,20 @@
 # @brief Rosetta mover to run HBDesigner, which designs buried hydrogen bond
 #        networks into an input backbone.
 #
-# HBDesigner (https://github.com/RosettaCommons/HBDesigner) is a command line
-# tool, so cmd_header is the full command prefix that reaches its entry
-# point, e.g. "conda run -n hbdesigner_gpu run_hbdesigner" or
-# "pixi run --manifest-path=/path/to/HBDesigner/pyproject.toml run_hbdesigner".
-# It pins python to 3.10 and brings its own torch, so it belongs in its own
-# environment.
+# run_command is the whole command prefix that reaches the HBDesigner entry
+# point, so the mover does not care how it is installed:
 #
-# The pose is written to input.pdb and HBDesigner is run over it. top_k
-# networks come back ranked; the best enters the pose and the rest are
-# exposed through get_additional_output().
+#   run_command="conda run -n hbdesigner_gpu run_hbdesigner"
+#   run_command="pixi run --manifest-path=/path/to/HBDesigner/pyproject.toml run_hbdesigner"
+#
+# When the attribute is not set the value comes from the HBDesigner section of
+# rosettalink.config.yaml. HBDesigner pins python to 3.10 and brings its own
+# torch, so it belongs in its own environment.
+#
+# Each pose of the step before is written to input.pdb and HBDesigner is run
+# over it, one invocation per pose in its own subdirectory. top_k networks
+# come back ranked per pose; the best of the first enters the pose and the
+# rest are exposed through get_additional_output().
 #
 # Every attribute in OPTION_HELP is passed through as --name value only when
 # set, so HBDesigner own defaults apply otherwise. Values are quoted, so
@@ -34,8 +38,6 @@
 import csv
 import os
 import re
-import shutil
-import tempfile
 from pathlib import Path
 
 import pyrosetta
@@ -43,8 +45,11 @@ from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
 from rosettalink.utils import carry_over
+from rosettalink.utils import get_run_command
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
+from rosettalink.utils import work_dir
+import rosettalink.movers.BaseLinkMover as BaseLinkMover
 
 # Attributes passed straight through to the run_hbdesigner command line as
 # --name value, each only when set. Descriptions name the HBDesigner default.
@@ -103,31 +108,29 @@ def parse_network(network):
     return residues
 
 
-class HBDesigner(pyrosetta.rosetta.protocols.moves.Mover):
+class HBDesigner(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
     def __init__(
         self,
-        cmd_header=None,
-        cpu="0",
-        restore_input_sequence="0",
+        run_command="",
+        cpu=False,
+        restore_input_sequence=False,
         reslabel="hbnet",
         prefix_name="HBDesigner_",
         extra_args=None,
         work_dir=None,
-        delete_dir=None,
         **options
     ):
-        pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
+        BaseLinkMover.BaseLinkMover.__init__(self)
 
-        self.cmd_header_ = cmd_header
+        self.run_command_ = run_command
         self.cpu_ = cpu
         self.restore_input_sequence_ = restore_input_sequence
         self.reslabel_ = reslabel
         self.prefix_name_ = prefix_name
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
-        self.delete_dir_ = delete_dir
         # Pass-through command line options, empty meaning "leave unset".
         self.options_ = {name: options.get(name, "") for name in OPTION_HELP}
         # Populated by apply(): every network beyond the best one, exposed
@@ -140,112 +143,106 @@ class HBDesigner(pyrosetta.rosetta.protocols.moves.Mover):
 
         self.tracer_info << (
             f"Initializing HBDesigner:\n"
-            f"\tcmd_header: {self.cmd_header_}\n"
+            f"\trun_command: {self.run_command_}\n"
             f"\tcpu: {self.cpu_}\n"
             f"\trestore_input_sequence: {self.restore_input_sequence_}\n"
             f"\treslabel: {self.reslabel_}\n"
             f"\tprefix_name: {self.prefix_name_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
-            f"\tdelete_dir: {self.delete_dir_}\n"
         ) and self.tracer_info.flush()
 
     def clone(self):
         copy = HBDesigner()
-        copy.cmd_header_ = self.cmd_header_
+        copy.run_command_ = self.run_command_
         copy.cpu_ = self.cpu_
         copy.restore_input_sequence_ = self.restore_input_sequence_
         copy.reslabel_ = self.reslabel_
         copy.prefix_name_ = self.prefix_name_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
-        copy.delete_dir_ = self.delete_dir_
         copy.options_ = dict(self.options_)
         HBDesigner.clones_.append(copy)
         return copy
 
     def apply(self, pose):
-        # --- working directory --- #
-        # Fresh, self-cleaning temp directory every call (or a fresh
-        # subdirectory of a configured work_dir) - never stored back onto
-        # self.work_dir_, so this mover instance can safely be applied more
-        # than once (e.g. from a RosettaScripts MultiplePoseMover).
-        if self.work_dir_ is None or self.work_dir_ == "":
-            temp_dir = tempfile.TemporaryDirectory()
-            run_dir = Path(temp_dir.name)
-            self.tracer_info << f"No working directory specified, using temporary directory: {run_dir}\n" and self.tracer_info.flush()
-        else:
-            temp_dir = None
-            os.makedirs(self.work_dir_, exist_ok=True)
-            run_dir = Path(tempfile.mkdtemp(dir=self.work_dir_))
-
-        # Keep a copy of the pose as handed to us: source of reslabels to
+        run_command = get_run_command(self.mover_name(), self.run_command_)
+        # Keep a copy of every pose as handed to us: source of reslabels to
         # carry forward, since the HBDesigner output pdb carries none.
-        input_pose = pose.clone()
+        input_poses = [input_pose.clone() for input_pose in self.take_input_poses(pose)]
 
-        # --- INPUT --- #
-        # A fixed input name keeps the output names predictable: HBDesigner
-        # prefixes them with the input file stem.
-        input_pdb = run_dir / "input.pdb"
-        pose.dump_pdb(str(input_pdb))
-        self.tracer_info << f"Wrote input pose to {input_pdb}\n" and self.tracer_info.flush()
+        with work_dir(self.work_dir_, self.tracer_debug) as run_dir:
+            self.tracer_info << f"Designing networks for {len(input_poses)} pose(s)\n" and self.tracer_info.flush()
 
-        # --- RUN HBDESIGNER --- #
-        hbdesigner_cmd_str = f"{self.cmd_header_} --pdb {input_pdb} --out_dir {run_dir}"
-        for name, value in self.options_.items():
-            if value != "" and value is not None:
-                # Quoted: guide_seq values can contain a pipe.
-                hbdesigner_cmd_str += f' --{name} "{value}"'
-        if self.cpu_:
-            hbdesigner_cmd_str += " --cpu"
-        if self.extra_args_:
-            hbdesigner_cmd_str += f" {self.extra_args_}"
+            designed_poses = []
+            for index, input_pose in enumerate(input_poses):
+                # One subdirectory per input structure, so the networks of one
+                # do not land among the networks of another.
+                design_dir = Path(f"input_{index}") if len(input_poses) > 1 else Path(".")
+                designed_poses.extend(
+                    self._run_one(input_pose, design_dir, run_command)
+                )
 
-        self.tracer_info << f"Running HBDesigner: {hbdesigner_cmd_str}\n" and self.tracer_info.flush()
-        run_and_log(hbdesigner_cmd_str, self.tracer_info, self.tracer_error)
+            self.tracer_info << f"HBDesigner returned {len(designed_poses)} network(s)\n" and self.tracer_info.flush()
 
-        # --- OUTPUT NETWORKS --- #
-        stats = self._read_stats(run_dir / "input_HBDes_stats.csv")
+            # Primary output: same convention as the other movers - the pose the
+            # caller already holds a reference to gets the top-ranked network.
+            pose.assign(designed_poses[0])
 
-        designed_poses = []
-        rank = 1
-        while True:
-            design_pdb = run_dir / f"input_HBDes_rank_{rank}.pdb"
-            if not design_pdb.is_file():
-                break
-            designed_poses.append(
-                self._load_and_label_design(design_pdb, stats.get(str(rank), {}), input_pose)
-            )
-            rank += 1
+            # Every further network is handed off through
+            # Mover::get_additional_output(), the standard Rosetta one-to-many
+            # mechanism, instead of being silently discarded.
+            self.additional_poses_ = list(designed_poses[1:])
 
-        if not designed_poses:
-            self.tracer_error << (
-                f"No HBDesigner output pdb files found under {run_dir}. HBDesigner returns "
-                f"nothing when no network satisfies the requested constraints; try raising "
-                f"n_samples or relaxing max_BUNs/max_BUPHs/min_sat.\n"
-            ) and self.tracer_error.flush()
-            raise RuntimeError(f"No HBDesigner output pdb files found under {run_dir}")
-        self.tracer_info << f"HBDesigner returned {len(designed_poses)} network(s)\n" and self.tracer_info.flush()
+    def _run_one(self, input_pose, design_dir, run_command):
+        """Runs HBDesigner once over one input structure and returns every
+        network it wrote, loaded and labelled.
 
-        # Primary output: same convention as the other movers - the pose the
-        # caller already holds a reference to gets the top-ranked network.
-        pose.assign(designed_poses[0])
-
-        # Every further network is handed off through
-        # Mover::get_additional_output(), the standard Rosetta one-to-many
-        # mechanism, instead of being silently discarded.
-        self.additional_poses_ = list(designed_poses[1:])
-
-        # --- CLEANUP --- #
+        Runs from inside design_dir so every path handed to HBDesigner stays
+        relative, whichever directory this input was put in."""
+        previous_dir = os.getcwd()
+        os.makedirs(design_dir, exist_ok=True)
+        os.chdir(design_dir)
         try:
-            if temp_dir:
-                temp_dir.cleanup()
-                self.tracer_info << f"Cleaned up temporary directory: {run_dir}\n" and self.tracer_info.flush()
-            elif self.delete_dir_:
-                shutil.rmtree(run_dir)
-                self.tracer_info << f"Deleted run directory: {run_dir}\n" and self.tracer_info.flush()
-        except Exception:
-            self.tracer_error << f"Failed to clean up run directory: {run_dir}\n" and self.tracer_error.flush()
+            # A fixed input name keeps the output names predictable:
+            # HBDesigner prefixes them with the input file stem.
+            input_pose.dump_pdb("input.pdb")
+
+            hbdesigner_cmd_str = f"{run_command} --pdb input.pdb --out_dir ."
+            for name, value in self.options_.items():
+                if value != "" and value is not None:
+                    # Quoted: guide_seq values can contain a pipe.
+                    hbdesigner_cmd_str += f' --{name} "{value}"'
+            if self.cpu_:
+                hbdesigner_cmd_str += " --cpu"
+            if self.extra_args_:
+                hbdesigner_cmd_str += f" {self.extra_args_}"
+
+            run_and_log(hbdesigner_cmd_str, self.tracer_info, self.tracer_error)
+
+            stats = self._read_stats(Path("input_HBDes_stats.csv"))
+
+            designed_poses = []
+            rank = 1
+            while True:
+                design_pdb = Path(f"input_HBDes_rank_{rank}.pdb")
+                if not design_pdb.is_file():
+                    break
+                designed_poses.append(
+                    self._load_and_label_design(design_pdb, stats.get(str(rank), {}), input_pose)
+                )
+                rank += 1
+
+            if not designed_poses:
+                self.tracer_error << (
+                    f"No HBDesigner output pdb files found in {os.getcwd()}. HBDesigner returns "
+                    f"nothing when no network satisfies the requested constraints; try raising "
+                    f"n_samples or relaxing max_BUNs/max_BUPHs/min_sat.\n"
+                ) and self.tracer_error.flush()
+                raise RuntimeError(f"No HBDesigner output pdb files found in {os.getcwd()}")
+            return designed_poses
+        finally:
+            os.chdir(previous_dir)
 
     def _read_stats(self, stats_csv):
         """Reads the HBDesigner stats csv into {rank: row}. Returns an empty
@@ -352,17 +349,13 @@ class HBDesigner(pyrosetta.rosetta.protocols.moves.Mover):
     def parse_my_tag(self, tag, data):
         self.tracer_debug << f"Parsing my tag @ HBDesigner...\n\tself: {self}\n\ttag: {tag}\n\tdata: {data}\n" and self.tracer_debug.flush()
 
-        # required attributes
-        self.cmd_header_ = tag.get_option_string("cmd_header")
-
-        # optional attributes
+        self.run_command_ = tag.get_option_string("run_command") if tag.hasOption("run_command") else ""
         self.cpu_ = tag.get_option_bool("cpu") if tag.hasOption("cpu") else False
         self.restore_input_sequence_ = tag.get_option_bool("restore_input_sequence") if tag.hasOption("restore_input_sequence") else False
         self.reslabel_ = tag.get_option_string("reslabel") if tag.hasOption("reslabel") else "hbnet"
         self.prefix_name_ = tag.get_option_string("prefix_name") if tag.hasOption("prefix_name") else "HBDesigner_"
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
-        self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
-        self.delete_dir_ = tag.get_option_bool("delete_dir") if tag.hasOption("delete_dir") else False
+        self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else None
 
         self.options_ = {
             name: (tag.get_option_string(name) if tag.hasOption(name) else "")
@@ -372,14 +365,13 @@ class HBDesigner(pyrosetta.rosetta.protocols.moves.Mover):
         set_options = {name: value for name, value in self.options_.items() if value != ""}
         self.tracer_info << (
             f"Parsed options:\n"
-            f"\tcmd_header: {self.cmd_header_}\n"
+            f"\trun_command: {self.run_command_}\n"
             f"\tcpu: {self.cpu_}\n"
             f"\trestore_input_sequence: {self.restore_input_sequence_}\n"
             f"\treslabel: {self.reslabel_}\n"
             f"\tprefix_name: {self.prefix_name_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
-            f"\tdelete_dir: {self.delete_dir_}\n"
             f"\tHBDesigner options: {set_options}\n"
         ) and self.tracer_info.flush()
 
@@ -394,10 +386,11 @@ class HBDesigner(pyrosetta.rosetta.protocols.moves.Mover):
 
         attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
 
-        attrlist.append(XMLSchemaAttribute.required_attribute(
-            "cmd_header",
+        attrlist.append(XMLSchemaAttribute.attribute_w_default(
+            "run_command",
             XMLSchemaType(xs_string),
-            "Start of the command string, reaching the HBDesigner entry point. For example conda run -n ENVNAME run_hbdesigner, or pixi run --manifest-path=/path/to/HBDesigner/pyproject.toml run_hbdesigner"))
+            "Command that runs the HBDesigner entry point, e.g. conda run -n ENVNAME run_hbdesigner, or pixi run --manifest-path=/path/to/HBDesigner/pyproject.toml run_hbdesigner. Taken from the HBDesigner section of rosettalink.config.yaml when not set here",
+            ""))
 
         for name, help_text in OPTION_HELP.items():
             attrlist.append(XMLSchemaAttribute.attribute_w_default(
@@ -434,13 +427,8 @@ class HBDesigner(pyrosetta.rosetta.protocols.moves.Mover):
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "work_dir",
             XMLSchemaType(xs_string),
-            "Parent directory under which each apply call gets its own fresh subdirectory (so this mover instance can safely be applied more than once, e.g. from a RosettaScripts MultiplePoseMover). If not provided, a new temporary directory is used per call instead. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
+            "Directory where the HBDesigner output will be stored. If attribute not provided, a new tempfile.TemporaryDirectory will be used. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
             ""))
-        attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "delete_dir",
-            XMLSchemaType(xs_boolean),
-            "Whether to delete this call run subdirectory after every network has been read from disk into the primary pose or the additional-output poses",
-            "false"))
 
         description = "Runs HBDesigner to design buried hydrogen bond networks into the pose backbone."
 
