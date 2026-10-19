@@ -191,6 +191,37 @@ def pose_chain_sequences(pose):
     return [chain.sequence() for chain in pose.split_by_chain()]
 
 
+def carry_over(new_pose, input_pose, resnums=None):
+    """Puts the reslabels and extra scores of input_pose onto new_pose.
+
+    A pose read back from an external program carries neither, so a stage
+    reads them off the pose it was handed. resnums gives, for each position of
+    new_pose in order, the residue of input_pose it came from; without it the
+    two are matched one to one. Call it before the mover sets its own scores,
+    which otherwise lose to the ones carried over."""
+    from pyrosetta.rosetta.core.pose import getPoseExtraFloatScores
+    from pyrosetta.rosetta.core.pose import getPoseExtraStringScores
+    from pyrosetta.rosetta.core.pose import setPoseExtraScore
+
+    pdb_info_old = input_pose.pdb_info()
+    pdb_info_new = new_pose.pdb_info()
+    if pdb_info_old is not None and pdb_info_new is not None:
+        if resnums is None:
+            resnums = range(
+                1, min(input_pose.total_residue(), new_pose.total_residue()) + 1
+            )
+        for position, resnum in enumerate(list(resnums)[: new_pose.total_residue()], 1):
+            for reslabel in pdb_info_old.get_reslabels(resnum):
+                pdb_info_new.add_reslabel(position, reslabel)
+
+    for scores in (
+        getPoseExtraFloatScores(input_pose),
+        getPoseExtraStringScores(input_pose),
+    ):
+        for name, value in scores.items():
+            setPoseExtraScore(new_pose, name, value)
+
+
 def drain_additional_output(mover):
     """Collects every pose a one-to-many mover produced beyond the one
     already sitting in the pose apply() was given.
