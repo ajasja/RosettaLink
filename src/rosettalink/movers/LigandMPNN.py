@@ -44,6 +44,7 @@ from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabe
 from pyrosetta.rosetta.core.select.residue_selector import get_residue_selector
 
 from rosettalink.decorators import register_mover
+from rosettalink.utils import carry_over
 from rosettalink.utils import get_run_command
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
@@ -451,14 +452,9 @@ class LigandMPNN(BaseLinkMover.BaseLinkMover):
         """Load one designed sequence, carry over the reslabels of the input
         pose, and label the residues this mover redesigned."""
         pose = pyrosetta.pose_from_file(str(pdb_file))
+        carry_over(pose, input_pose)
 
-        pdb_info_old = input_pose.pdb_info()
         pdb_info_new = pose.pdb_info()
-        if pdb_info_old is not None and pdb_info_new is not None:
-            for resnum in range(1, min(input_pose.total_residue(), pose.total_residue()) + 1):
-                for reslabel in pdb_info_old.get_reslabels(resnum):
-                    pdb_info_new.add_reslabel(resnum, reslabel)
-
         if pdb_info_new is not None and redesigned_resnums:
             label = f"{self.prefix_name_}new_sidechains"
             for resnum in sorted(redesigned_resnums):

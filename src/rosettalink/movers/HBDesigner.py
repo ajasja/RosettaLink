@@ -42,6 +42,7 @@ import pyrosetta
 from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
+from rosettalink.utils import carry_over
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
 
@@ -295,17 +296,12 @@ class HBDesigner(pyrosetta.rosetta.protocols.moves.Mover):
         return restored
 
     def _load_and_label_design(self, design_pdb, stats_row, input_pose):
-        """Load one designed network, carry over reslabels from the input
-        pose, label the network residues, and attach the scores of its stats
-        row."""
+        """Load one designed network, carry over the reslabels and scores of
+        the input pose, label the network residues, and attach the scores of
+        its stats row."""
         pose = pyrosetta.pose_from_file(str(design_pdb))
-
-        pdb_info_old = input_pose.pdb_info()
+        carry_over(pose, input_pose)
         pdb_info_new = pose.pdb_info()
-        if pdb_info_old is not None and pdb_info_new is not None:
-            for resnum in range(1, min(input_pose.total_residue(), pose.total_residue()) + 1):
-                for reslabel in pdb_info_old.get_reslabels(resnum):
-                    pdb_info_new.add_reslabel(resnum, reslabel)
 
         # --- NETWORK RESIDUE LABELS --- #
         network = stats_row.get("network", "")
