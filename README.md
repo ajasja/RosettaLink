@@ -2,7 +2,19 @@
 RosettaLink: (Python) Movers to Link AI Models with Rosetta Workflows
 
 ## Dev installation
-`pip install -e .`
+Temporarily, until RosettaLink is merged into PyRosetta, choose a [publicly available needed wheel](https://graylab.jhu.edu/download/PyRosetta4/archive/release/0.temp-rosettalink/) and follow these steps:
+
+```sh
+screen -D -RR PublicWheels
+wget https://graylab.jhu.edu/download/PyRosetta4/archive/release/0.temp-rosettalink/pyrosetta-2025.29.post0.dev0+14.commits.6b923229bb-cp312-cp312-linux_x86_64.whl # Takes multiple hours
+conda create --prefix ~/.conda/envs/RosettaLink
+conda activate ~/.conda/envs/RosettaLink
+conda install python=3.12
+pip install pyrosetta-2025.29.post0.dev0+14.commits.6b923229bb-cp312-cp312-linux_x86_64.whl
+git clone https://github.com/ajasja/RosettaLink.git
+cd RosettaLink
+pip install -e .
+```
 
 ## Caveats
 Attribute values must not be empty strings. `work_dir=""` reports that `work_dir` is not a valid option for the mover, which is misleading. Omit the attribute instead; a mover given none makes its own temporary directory.
