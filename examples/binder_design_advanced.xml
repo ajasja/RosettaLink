@@ -5,7 +5,7 @@
   backbone restrained, then scored on its interface, surface and hydrogen
   bonds.
 
-  rosetta_link_scripts \
+      rosetta_link_scripts \
           -parser:protocol examples/binder_design_advanced.xml \
           -corrections::beta_nov16 \
           -s examples/input_data/insulin_target.pdb \
@@ -16,10 +16,14 @@
       mkdir -p logs
       SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
           sbatch run_protocol.sh examples/binder_design_advanced.xml \
-          -s examples/input_data/insulin_target.pdb -out:path output/binder_advanced
+          -corrections::beta_nov16 \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/binder_design_advanced
 
   Run from the repository root, which existing_msa_file is relative to.
   scRMSD_binder_sidechains uses atoms="heavy"; the other RMSDs use CA.
+  -corrections::beta_nov16 goes with the beta_nov16 score functions below:
+  without it Rosetta refuses to build them and the protocol stops at parse.
 
   The contig keeps target chain B whole, then starts a new chain of 90 to 120
   de novo residues. 2 backbones x 2 sequences = 4 designs, less whatever
@@ -112,7 +116,7 @@
             pack_separated="false"
             packstat="true"
             interface_sc="true"
-            scorefile_reporting_prefix="if_" />
+            scorefile_reporting_prefix="if" />
     </MOVERS>
 
     <FILTERS>

@@ -4,9 +4,27 @@ from pathlib import Path
 import pytest
 
 from rosettalink.utils import RMSD_ATOM_SETS
+from rosettalink.utils import SENTINEL_NAME
 from rosettalink.utils import drain_additional_output
+from rosettalink.utils import forget_finished_work_dirs
+from rosettalink.utils import is_reusing_finished_output
 from rosettalink.utils import parse_fasta_records
+from rosettalink.utils import run_and_log
 from rosettalink.utils import work_dir
+
+
+class FakeTracer:
+	"""Stands in for a Rosetta Tracer: collects what is written to it."""
+
+	def __init__(self):
+		self.messages = []
+
+	def __lshift__(self, text):
+		self.messages.append(text)
+		return self
+
+	def flush(self):
+		pass
 
 
 # --------------------------------------------------------------------------- #
@@ -111,14 +129,16 @@ def test_the_temporary_directory_is_removed(tmp_path, monkeypatch):
 	assert not run_dir.exists()
 
 
-def test_contents_are_copied_to_work_dir(tmp_path, monkeypatch):
+def test_the_run_happens_in_work_dir(tmp_path, monkeypatch):
 	monkeypatch.chdir(tmp_path)
 	kept = tmp_path / "kept"
 
-	with work_dir(str(kept)):
+	with work_dir(str(kept)) as run_dir:
+		assert Path(run_dir).samefile(kept)
 		Path("output.pdb").write_text("ATOM\n")
 		os.makedirs("backbones")
 		Path("backbones/design_1.pdb").write_text("ATOM\n")
+		assert (kept / "output.pdb").is_file()
 
 	assert (kept / "output.pdb").read_text() == "ATOM\n"
 	assert (kept / "backbones" / "design_1.pdb").is_file()
@@ -144,9 +164,6 @@ def test_a_relative_work_dir_resolves_against_the_directory_it_started_in(tmp_pa
 
 
 def test_a_second_run_overwrites_the_output_of_the_first(tmp_path, monkeypatch):
-	# A mover applied more than once with a work_dir set keeps only the last
-	# result; the runs themselves stay separate, each in its own temporary
-	# directory.
 	monkeypatch.chdir(tmp_path)
 	kept = tmp_path / "kept"
 
@@ -165,6 +182,108 @@ def test_nothing_is_kept_without_a_work_dir(tmp_path, monkeypatch):
 		Path("output.pdb").write_text("ATOM\n")
 
 	assert list(tmp_path.iterdir()) == []
+
+
+# --------------------------------------------------------------------------- #
+# Resuming a finished stage
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(autouse=True)
+def _forget_finished():
+	forget_finished_work_dirs()
+	yield
+	forget_finished_work_dirs()
+
+
+def test_a_finished_run_leaves_the_sentinel(tmp_path, monkeypatch):
+	monkeypatch.chdir(tmp_path)
+	kept = tmp_path / "kept"
+
+	with work_dir(str(kept)):
+		Path("output.pdb").write_text("ATOM\n")
+
+	assert (kept / SENTINEL_NAME).is_file()
+
+
+def test_a_failed_run_leaves_no_sentinel(tmp_path, monkeypatch):
+	monkeypatch.chdir(tmp_path)
+	kept = tmp_path / "kept"
+
+	with pytest.raises(RuntimeError):
+		with work_dir(str(kept)):
+			raise RuntimeError("the wrapped program failed")
+
+	assert not (kept / SENTINEL_NAME).exists()
+
+
+def test_no_sentinel_without_a_work_dir(tmp_path, monkeypatch):
+	monkeypatch.chdir(tmp_path)
+
+	with work_dir() as run_dir:
+		assert not (run_dir / SENTINEL_NAME).exists()
+
+	assert list(tmp_path.iterdir()) == []
+
+
+def test_a_later_run_reuses_a_finished_work_dir(tmp_path, monkeypatch):
+	monkeypatch.chdir(tmp_path)
+	kept = tmp_path / "kept"
+
+	with work_dir(str(kept)):
+		assert not is_reusing_finished_output()
+		Path("output.pdb").write_text("ATOM\n")
+
+	forget_finished_work_dirs()
+	with work_dir(str(kept)):
+		assert is_reusing_finished_output()
+
+
+def test_a_second_apply_in_one_run_does_not_reuse(tmp_path, monkeypatch):
+	monkeypatch.chdir(tmp_path)
+	kept = tmp_path / "kept"
+
+	with work_dir(str(kept)):
+		pass
+	with work_dir(str(kept)):
+		assert not is_reusing_finished_output()
+
+
+def test_the_flag_is_off_again_after_the_block(tmp_path, monkeypatch):
+	monkeypatch.chdir(tmp_path)
+	kept = tmp_path / "kept"
+
+	with work_dir(str(kept)):
+		pass
+	forget_finished_work_dirs()
+	with work_dir(str(kept)):
+		assert is_reusing_finished_output()
+
+	assert not is_reusing_finished_output()
+
+
+def test_run_and_log_raises_on_a_failing_command(tmp_path, monkeypatch):
+	monkeypatch.chdir(tmp_path)
+	tracer = FakeTracer()
+
+	with work_dir(str(tmp_path / "kept")):
+		with pytest.raises(Exception):
+			run_and_log("exit 7", tracer, tracer)
+
+
+def test_a_reused_stage_does_not_run_its_command(tmp_path, monkeypatch):
+	monkeypatch.chdir(tmp_path)
+	kept = tmp_path / "kept"
+	tracer = FakeTracer()
+
+	with work_dir(str(kept)):
+		pass
+
+	forget_finished_work_dirs()
+	with work_dir(str(kept)):
+		run_and_log("exit 7", tracer, tracer)
+
+	assert any(SENTINEL_NAME in message for message in tracer.messages)
 
 
 # --------------------------------------------------------------------------- #

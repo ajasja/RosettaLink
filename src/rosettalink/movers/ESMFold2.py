@@ -48,6 +48,7 @@ from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabe
 from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
+from rosettalink.utils import carry_over
 from rosettalink.utils import parse_fasta_records
 from rosettalink.utils import resolve_rmsd_atoms
 from rosettalink.utils import setup_tracer
@@ -457,12 +458,7 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
 
         if self.replace_pose_:
             pose = self._pose_from_structure_file(structure_file)
-            pdb_info_old = input_pose.pdb_info()
-            pdb_info_new = pose.pdb_info()
-            if pdb_info_old is not None and pdb_info_new is not None:
-                for resnum in range(1, min(input_pose.total_residue(), pose.total_residue()) + 1):
-                    for reslabel in pdb_info_old.get_reslabels(resnum):
-                        pdb_info_new.add_reslabel(resnum, reslabel)
+            carry_over(pose, input_pose)
         else:
             pose = input_pose.clone()
 
