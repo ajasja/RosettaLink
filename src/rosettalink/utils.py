@@ -463,3 +463,385 @@ def build_partial_a3m(chain_sequences, chain_alignments, chain_covered):
 def chain_letter(index):
     letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     return letters[index % len(letters)]
+
+
+# --------------------------------------------------------------------------- #
+# Structure prediction, shared by the ColabFold and ESMFold2 movers
+# --------------------------------------------------------------------------- #
+#
+# The functions taking a mover read its replace_pose_, match_chains_,
+# prefix_name_, rmsd_metrics, confidence_metrics and tracers.
+
+
+def ca_coordinates(pose, resnums):
+    """Alpha carbons of the residues given, as an array of rows."""
+    import numpy as np
+
+    return np.array([list(pose.residue(resnum).xyz("CA")) for resnum in resnums])
+
+
+def residue_map(mapping):
+    """A {resnum: resnum} dict as the std::map RMSDMetric takes."""
+    import pyrosetta
+
+    converted = pyrosetta.rosetta.std.map_unsigned_long_unsigned_long()
+    for key, value in mapping.items():
+        converted[key] = value
+    return converted
+
+
+def index_selector(resnums):
+    from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector
+
+    return ResidueIndexSelector(",".join(str(resnum) for resnum in resnums))
+
+
+def selected_positions(pose, selector, limit=None):
+    """Residues a selector picks, in pose numbering, up to limit residues when
+    given. A selector of None is every residue."""
+    last = pose.total_residue() if limit is None else min(pose.total_residue(), limit)
+    if selector is None:
+        return list(range(1, last + 1))
+    picked = selector.apply(pose)
+    return [resnum for resnum in range(1, last + 1) if picked[resnum]]
+
+
+def folded_residues(pose, subset_selector):
+    """Residues of one input pose that are folded, in pose numbering.
+    subset_selector picks them; without it every residue is folded."""
+    resnums = selected_positions(pose, subset_selector)
+    if subset_selector is not None and not resnums:
+        raise RuntimeError("subset_selector picks no residue, so there is nothing to fold")
+    return resnums
+
+
+def chains_of(pose, resnums):
+    """The folded residues grouped into chains, as (chain letter, sequence,
+    resnums), keeping pose order."""
+    pdb_info = pose.pdb_info()
+    groups = []
+    for resnum in resnums:
+        chain = pdb_info.chain(resnum) if pdb_info is not None else "A"
+        if not groups or groups[-1][0] != chain:
+            groups.append((chain, [], []))
+        groups[-1][1].append(pose.residue(resnum).name1())
+        groups[-1][2].append(resnum)
+    return [(chain, "".join(letters), numbers) for chain, letters, numbers in groups]
+
+
+def pose_records(poses, subset_selector):
+    """What a predictor folds for each input pose: the records, as
+    (record_id, [chain sequence, ...]), and per record the (pose, chains,
+    folded resnums) its prediction is labelled from, chains as chains_of
+    returns them."""
+    records = []
+    per_record = []
+    for index, pose in enumerate(poses):
+        resnums = folded_residues(pose, subset_selector)
+        chains = chains_of(pose, resnums)
+        per_record.append((pose, chains, resnums))
+        records.append((f"design_{index}", [sequence for _, sequence, _ in chains]))
+    return records, per_record
+
+
+def chains_in_order(pose, resnums):
+    """[(chain letter, [resnum, ...]), ...] for the residues given, chains
+    in the order they first appear."""
+    pdb_info = pose.pdb_info()
+    chains = []
+    index = {}
+    for resnum in resnums:
+        letter = pdb_info.chain(resnum) if pdb_info is not None else str(pose.chain(resnum))
+        if letter not in index:
+            index[letter] = len(chains)
+            chains.append((letter, []))
+        chains[index[letter]][1].append(resnum)
+    return chains
+
+
+def matched_chain_mapping(prediction, input_pose, folded_resnums, tracer_info):
+    """The {prediction resnum: pose resnum} map that fits best, or None
+    when the chains are already paired as named.
+
+    A predictor names the chains of a homo-oligomer in whatever order it
+    likes, and residue i of chain A is then compared against a different
+    chain of the pose. Chains pair only with chains of the same sequence
+    and length; see match_chains."""
+    positions = list(range(1, prediction.total_residue() + 1))
+    predicted = chains_in_order(prediction, positions)
+    folded = chains_in_order(
+        input_pose, [folded_resnums[position - 1] for position in positions]
+    )
+    if len(predicted) != len(folded) or len(predicted) < 2:
+        return None
+
+    order = match_chains(
+        [ca_coordinates(prediction, members) for _, members in predicted],
+        [ca_coordinates(input_pose, members) for _, members in folded],
+        ["".join(input_pose.residue(resnum).name1() for resnum in members)
+         for _, members in folded],
+    )
+    if order == list(range(len(folded))):
+        return None
+
+    mapping = {}
+    for i, j in enumerate(order):
+        mapping.update(zip(predicted[i][1], folded[j][1]))
+
+    def score(pairs):
+        pairs = sorted(pairs.items())
+        return superimposed_rmsd(
+            ca_coordinates(prediction, [position for position, _ in pairs]),
+            ca_coordinates(input_pose, [resnum for _, resnum in pairs]),
+        )
+
+    as_named = dict(zip(positions, [folded_resnums[p - 1] for p in positions]))
+    tracer_info << (
+        f"Chains of the prediction match the pose in another order: "
+        f"CA RMSD {score(as_named):.2f} as named, {score(mapping):.2f} matched. "
+        f"Measuring every RMSD on the matched chains\n"
+    ) and tracer_info.flush()
+    return mapping
+
+
+def label_prediction(mover, prediction, record_id, scores, score_keys, input_pose, folded_resnums):
+    """Carries over the reslabels of the residues a prediction was folded
+    from, attaches its confidence scores and computes any configured RMSD
+    metrics. Returns the pose to emit: the prediction, or a copy of the input
+    pose when replace_pose is false.
+
+    scores is the confidence json of the prediction, None when there is
+    none, and score_keys the values in it reported as their mean.
+
+    input_pose is None for a structure folded from a fasta record. Those
+    have no correspondence to any pose, so no labels are carried and no
+    RMSD is computed; the id is recorded as the pose comment fasta_id.
+
+    The metrics always read the prediction, whatever replace_pose emits."""
+    import pyrosetta
+
+    if input_pose is None:
+        pyrosetta.rosetta.core.pose.add_comment(prediction, "fasta_id", record_id)
+        attach_prediction_scores(mover, prediction, prediction, record_id, scores, score_keys)
+        if mover.rmsd_metrics:
+            mover.tracer_warning << (
+                "Skipping RMSD metrics: structures folded from a fasta have no "
+                "correspondence to the input pose\n"
+            ) and mover.tracer_warning.flush()
+        return prediction
+
+    # Residue i of the prediction is the i-th folded residue of the pose
+    # it came from, which is every residue unless subset_selector picks.
+    pdb_info_old = input_pose.pdb_info()
+    pdb_info_new = prediction.pdb_info()
+    if pdb_info_old is not None and pdb_info_new is not None:
+        for position, resnum in enumerate(folded_resnums[: prediction.total_residue()], 1):
+            for reslabel in pdb_info_old.get_reslabels(resnum):
+                pdb_info_new.add_reslabel(position, reslabel)
+
+    emitted = prediction if mover.replace_pose_ else input_pose.clone()
+
+    attach_prediction_scores(mover, emitted, prediction, record_id, scores, score_keys)
+    attach_rmsd_metrics(mover, emitted, prediction, input_pose, folded_resnums)
+    return emitted
+
+
+def attach_prediction_scores(mover, emitted, prediction, record_id, scores, score_keys):
+    """Attaches the mean of each of score_keys found in scores, then every
+    configured metric subtag. Nothing when scores is None."""
+    import numpy as np
+    from pyrosetta.rosetta.core.pose import setPoseExtraScore
+
+    if scores is None:
+        return
+    for key in score_keys:
+        if scores.get(key) is not None:
+            value = float(np.mean(scores[key]))
+            score_name = f"{mover.prefix_name_}{key}"
+            setPoseExtraScore(emitted, score_name, value)
+            mover.tracer_info << f"\t{record_id} {score_name}: {value}\n" and mover.tracer_info.flush()
+
+    attach_confidence_metrics(mover, emitted, prediction, record_id, scores)
+
+
+def attach_confidence_metrics(mover, emitted, prediction, record_id, scores):
+    """Computes every configured metric subtag: one confidence value
+    averaged over the residues its selector picks.
+
+    A metric whose selector picks nothing is skipped and warned about,
+    rather than reported as the mean of an empty selection."""
+    import numpy as np
+    from pyrosetta.rosetta.core.pose import setPoseExtraScore
+
+    for metric in mover.confidence_metrics:
+        quantity = metric["quantity"]
+        if scores.get(quantity) is None:
+            mover.tracer_warning << (
+                f"Skipping metric {metric['name']}: the scores of {record_id} "
+                f"have no {quantity}\n"
+            ) and mover.tracer_warning.flush()
+            continue
+
+        resnums = selected_positions(prediction, metric["selector"], len(scores[quantity]))
+        if not resnums:
+            mover.tracer_warning << (
+                f"Skipping metric {metric['name']}: its selector picks no residue "
+                f"of {record_id}\n"
+            ) and mover.tracer_warning.flush()
+            continue
+
+        if quantity == "pae":
+            # pae is a residue by residue matrix, so restricting it to a
+            # selection means the block where both residues are selected.
+            values = [scores["pae"][i - 1][j - 1] for i in resnums for j in resnums]
+        else:
+            values = [scores[quantity][resnum - 1] for resnum in resnums]
+
+        value = float(np.mean(values))
+        score_name = f"{mover.prefix_name_}{metric['name']}"
+        setPoseExtraScore(emitted, score_name, value)
+        mover.tracer_info << f"\t{record_id} {score_name}: {value}\n" and mover.tracer_info.flush()
+
+
+def attach_rmsd_metrics(mover, emitted, prediction, input_pose, folded_resnums):
+    """Computes every configured <RMSD> between the prediction and the
+    residues of the pose it was folded from, and reports it on the pose
+    the mover emits.
+
+    A selector is read on the prediction and carried to the pose it came
+    from through folded_resnums, so the two sides hold the same residues
+    even when subset_selector folded only part of the pose.
+
+    The chains are matched first when match_chains is set, since a
+    predictor names the chains of a homo-oligomer in whatever order it
+    likes."""
+    import pyrosetta
+    from pyrosetta.rosetta.core.pose import setPoseExtraScore
+
+    matched = None
+    if mover.match_chains_ and mover.rmsd_metrics:
+        matched = matched_chain_mapping(prediction, input_pose, folded_resnums, mover.tracer_info)
+    for rmsd in mover.rmsd_metrics:
+        measured = selected_positions(prediction, rmsd["calculation"])
+        if not measured:
+            mover.tracer_warning << (
+                f"Skipping RMSD {rmsd['name']}: calculation_selector picks no "
+                f"residue of the prediction\n"
+            ) and mover.tracer_warning.flush()
+            continue
+
+        selectors = [
+            index_selector(measured),
+            index_selector([folded_resnums[position - 1] for position in measured]),
+        ]
+
+        superimpose = None
+        if rmsd["alignment"] is not None:
+            aligned = selected_positions(prediction, rmsd["alignment"])
+            if not aligned:
+                mover.tracer_warning << (
+                    f"Skipping RMSD {rmsd['name']}: alignment_selector picks no "
+                    f"residue of the prediction\n"
+                ) and mover.tracer_warning.flush()
+                continue
+            superimpose = (
+                index_selector(aligned),
+                index_selector([folded_resnums[position - 1] for position in aligned]),
+            )
+
+        rmsd_metric = pyrosetta.rosetta.core.simple_metrics.metrics.RMSDMetric()
+        rmsd_metric.set_residue_selector(selectors[0])
+        rmsd_metric.set_residue_selector_reference(selectors[1])
+        rmsd_metric.set_comparison_pose(input_pose)
+        if superimpose is not None:
+            rmsd_metric.set_residue_selector_super(superimpose[0])
+            rmsd_metric.set_residue_selector_super_reference(superimpose[1])
+        if matched is not None:
+            if superimpose is not None:
+                # A residue mapping replaces the selectors inside
+                # RMSDMetric, the superposition ones included, so the two
+                # cannot be given together.
+                mover.tracer_warning << (
+                    f"RMSD {rmsd['name']}: measuring on the chains as named, "
+                    f"since alignment_selector and matched chains cannot be "
+                    f"used together\n"
+                ) and mover.tracer_warning.flush()
+            else:
+                rmsd_metric.set_residue_mapping(
+                    residue_map({position: matched[position] for position in measured})
+                )
+        # RMSDMetric does not align by default, which for a prediction in
+        # its own reference frame measures the frame offset rather than
+        # any structural difference.
+        rmsd_metric.set_run_superimpose(True)
+        # Governs the superposition as well as the measurement. Rosetta
+        # defaults to all heavy atoms, i.e. sidechains included.
+        rmsd_metric.set_rmsd_type(resolve_rmsd_atoms(rmsd["atoms"]))
+
+        rmsd_value = rmsd_metric.calculate(prediction)
+        rmsd_name = f"{mover.prefix_name_}{rmsd['name']}"
+        setPoseExtraScore(emitted, rmsd_name, rmsd_value)
+        mover.tracer_info << f"\t{rmsd_name}: {rmsd_value}\n" and mover.tracer_info.flush()
+
+
+def selector_option(tag, option, data):
+    """The residue selector an attribute names, or None when unset, which
+    every caller reads as every residue."""
+    from pyrosetta.rosetta.core.select.residue_selector import get_residue_selector
+
+    if not tag.hasOption(option):
+        return None
+    return get_residue_selector(tag.get_option_string(option), data)
+
+
+def parse_rmsd_tag(child, data):
+    """One RMSD subtag.
+
+    calculation_selector names the residues the RMSD is measured over and
+    alignment_selector the residues the structures are superimposed on.
+    Both name a residue selector and both default to every residue, so an
+    RMSD subtag with neither measures the whole prediction."""
+    return {
+        "name": child.get_option_string("name"),
+        "calculation": selector_option(child, "calculation_selector", data),
+        "alignment": selector_option(child, "alignment_selector", data),
+        "atoms": child.get_option_string("atoms") if child.hasOption("atoms") else "ca",
+    }
+
+
+def parse_metric_tag(child, data):
+    """One metric subtag: base_metric names the per residue confidence
+    value and selector the residues it is averaged over, defaulting to
+    every residue."""
+    base_metric = child.get_option_string("base_metric").lower()
+    if base_metric not in ("plddt", "pae"):
+        raise RuntimeError(
+            f"metric {child.get_option_string('name')} has base_metric="
+            f"{child.get_option_string('base_metric')}, which is neither pLDDT nor pAE"
+        )
+    return {
+        "name": child.get_option_string("name"),
+        "quantity": base_metric,
+        "selector": selector_option(child, "selector", data),
+    }
+
+
+def parse_prediction_metrics(mover, tag, data):
+    """Appends the RMSD and metric subtags of tag to mover.rmsd_metrics and
+    mover.confidence_metrics."""
+    for child in tag.getTags():
+        if child.getName() == "RMSD":
+            mover.rmsd_metrics.append(parse_rmsd_tag(child, data))
+        elif child.getName() == "metric":
+            mover.confidence_metrics.append(parse_metric_tag(child, data))
+    # Reject an unknown atoms= value here rather than after the
+    # prediction has already run.
+    for rmsd in mover.rmsd_metrics:
+        resolve_rmsd_atoms(rmsd["atoms"])
+    rmsd_names = [f"{rmsd['name']} (atoms={rmsd['atoms']})" for rmsd in mover.rmsd_metrics]
+    mover.tracer_info << f"RMSD metrics found: {rmsd_names}\n" and mover.tracer_info.flush()
+    metric_names = [
+        f"{metric['name']} ({metric['quantity']})"
+        for metric in mover.confidence_metrics
+    ]
+    mover.tracer_info << f"Confidence metrics found: {metric_names}\n" and mover.tracer_info.flush()
