@@ -1,0 +1,66 @@
+<!--
+  Buried hydrogen bond network, then a sequence around it. HBDesigner designs
+  the network into the input backbone and labels it hbd_hbnet; LigandMPNN designs
+  every other position with the network held fixed. 3 networks x 2 sequences
+  = 6 designs.
+
+      rosetta_link_scripts \
+          -parser:protocol examples/hbnet_design.xml \
+          -s examples/input_data/coiled_coil_trimer.pdb \
+          -out:path output/hbnet_design
+
+  or on a slurm cluster, from the repository root:
+
+      mkdir -p logs
+      SBATCH_PARTITION=gpu CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/hbnet_design.xml \
+          -s examples/input_data/coiled_coil_trimer.pdb \
+          -out:path output/hbnet_design
+
+  HBDesigner returns glycine at every position outside the network, and
+  restore_input_sequence is deliberately left off here so LigandMPNN designs
+  those positions rather than putting the input sequence back.
+
+  The network label is prefix_name plus reslabel, so hbd_ and hbnet give
+  hbd_hbnet, which is what the selector below names.
+
+  min_sat is below the HBDesigner default of 0.5 so that more than one network
+  comes back on this scaffold. n_samples is left at 50: a high sample count
+  can exhaust the open file limit inside HBDesigner's worker pool, which
+  presents as a job that stops making progress rather than one that fails.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <ResiduePDBInfoHasLabel name="hbnet" property="hbd_hbnet" />
+        <ResiduePDBInfoHasLabel name="redesigned" property="mpnn_new_sidechains" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <HBDesigner name="design_network"
+            n_res="3"
+            top_k="3"
+            n_samples="50"
+            min_sat="0.3"
+            reslabel="hbnet"
+            prefix_name="hbd_"
+            work_dir="01_hbdesigner" />
+
+        <LigandMPNN name="design_around_network"
+            batch_size="2"
+            fixed_selector="hbnet"
+            prefix_name="mpnn_"
+            work_dir="02_ligandmpnn" />
+    </MOVERS>
+
+    <FILTERS>
+        <NetCharge name="netcharge" confidence="0" />
+    </FILTERS>
+
+    <PROTOCOLS>
+        <Add mover="design_network" />
+        <Add mover="design_around_network" />
+        <Add filter="netcharge" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

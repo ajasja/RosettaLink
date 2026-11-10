@@ -22,9 +22,10 @@
 # option values containing commas or pipes (guide_seq="S,N|Q,T") are safe.
 # Anything not listed can be reached through extra_args.
 #
-# Residues forming the designed network are labelled with reslabel ("hbnet"
-# by default), so downstream protocols can select them with
-# ResiduePDBInfoHasLabelSelector. Labels on the input pose are carried over.
+# Residues forming the designed network are labelled prefix_name + reslabel,
+# so prefix_name="hbd_" with the default reslabel gives hbd_hbnet, which a
+# downstream protocol selects with ResiduePDBInfoHasLabelSelector. Labels on
+# the input pose are carried over.
 #
 # HBDesigner returns glycine at every position outside the network.
 # restore_input_sequence replaces those positions with the residues of the
@@ -304,6 +305,7 @@ class HBDesigner(BaseLinkMover.BaseLinkMover):
         network = stats_row.get("network", "")
         network_resnums = []
         if network and pdb_info_new is not None:
+            label = f"{self.prefix_name_}{self.reslabel_}"
             for chain, pdb_resnum in parse_network(network):
                 resnum = pdb_info_new.pdb2pose(chain, pdb_resnum)
                 if resnum == 0:
@@ -311,10 +313,10 @@ class HBDesigner(BaseLinkMover.BaseLinkMover):
                         f"Network residue {chain}{pdb_resnum} not found in {design_pdb.name}\n"
                     ) and self.tracer_warning.flush()
                     continue
-                pdb_info_new.add_reslabel(resnum, self.reslabel_)
+                pdb_info_new.add_reslabel(resnum, label)
                 network_resnums.append(resnum)
             self.tracer_info << (
-                f"\tnetwork {network} labelled {self.reslabel_} at {network_resnums}\n"
+                f"\tnetwork {network} labelled {label} at {network_resnums}\n"
             ) and self.tracer_info.flush()
 
         # --- INPUT SEQUENCE --- #
@@ -412,12 +414,12 @@ class HBDesigner(BaseLinkMover.BaseLinkMover):
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "reslabel",
             XMLSchemaType(xs_string),
-            "Residue label applied to the residues forming the designed network",
+            "Residue label applied to the residues forming the designed network, with prefix_name in front of it. A selector names the whole thing, so prefix_name=hbd_ and reslabel=hbnet are selected as hbd_hbnet",
             "hbnet"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "prefix_name",
             XMLSchemaType(xs_string),
-            "Prefix to all metrics reported by the mover",
+            "Put in front of every score this mover reports and of the reslabel it stamps, so prefix_name=hbd_ gives hbd_Rank and hbd_hbnet",
             "HBDesigner_"))
         attrlist.append(XMLSchemaAttribute.attribute_w_default(
             "extra_args",
