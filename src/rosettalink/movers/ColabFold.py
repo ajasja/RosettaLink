@@ -45,6 +45,7 @@ from pyrosetta.rosetta.core.select.residue_selector import get_residue_selector
 from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
+from rosettalink.utils import carry_over
 from rosettalink.utils import get_run_command
 from rosettalink.utils import build_partial_a3m
 from rosettalink.utils import chain_letter
@@ -372,12 +373,7 @@ class ColabFold(BaseLinkMover.BaseLinkMover):
 
         # Residue i of the prediction is the i-th folded residue of the pose
         # it came from, which is every residue unless subset_selector picks.
-        pdb_info_old = input_pose.pdb_info()
-        pdb_info_new = prediction.pdb_info()
-        if pdb_info_old is not None and pdb_info_new is not None:
-            for position, resnum in enumerate(folded_resnums[: prediction.total_residue()], 1):
-                for reslabel in pdb_info_old.get_reslabels(resnum):
-                    pdb_info_new.add_reslabel(position, reslabel)
+        carry_over(prediction, input_pose, folded_resnums)
 
         emitted = prediction if self.replace_pose_ else input_pose.clone()
 

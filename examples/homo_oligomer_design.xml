@@ -59,8 +59,8 @@
         <Add mover="design_backbone" />
         <FOR_EACH_POSE><PROTOCOLS>
             <Add mover="design_sequence" />
-            <Add mover="predict_structure" />
         </PROTOCOLS></FOR_EACH_POSE>
+        <Add mover="predict_structure" />
     </PROTOCOLS>
 
 </ROSETTASCRIPTS>

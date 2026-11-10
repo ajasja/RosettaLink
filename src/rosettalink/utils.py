@@ -1,6 +1,5 @@
 import os
 import re
-import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,7 +10,16 @@ from pathlib import Path
 
 
 def run_and_log(command, tracer_info, tracer_error):
-    """Runs a command using os.system and also logs the command before running using print"""
+    """Runs a command using os.system and also logs the command before running using print
+
+    Logs and skips the command while the work_dir() block in progress is
+    reusing finished output."""
+    if reusing_finished_output:
+        tracer_info << (
+            f"{SENTINEL_NAME} is present in {os.getcwd()}, reusing that output "
+            f"instead of running: {command} \n"
+        ) and tracer_info.flush()
+        return
     tracer_info << f"Running command: {command} \n" and tracer_info.flush()
     stat = os.system(command)
     wife = os.WIFEXITED(stat)
@@ -183,6 +191,37 @@ def pose_chain_sequences(pose):
     return [chain.sequence() for chain in pose.split_by_chain()]
 
 
+def carry_over(new_pose, input_pose, resnums=None):
+    """Puts the reslabels and extra scores of input_pose onto new_pose.
+
+    A pose read back from an external program carries neither, so a stage
+    reads them off the pose it was handed. resnums gives, for each position of
+    new_pose in order, the residue of input_pose it came from; without it the
+    two are matched one to one. Call it before the mover sets its own scores,
+    which otherwise lose to the ones carried over."""
+    from pyrosetta.rosetta.core.pose import getPoseExtraFloatScores
+    from pyrosetta.rosetta.core.pose import getPoseExtraStringScores
+    from pyrosetta.rosetta.core.pose import setPoseExtraScore
+
+    pdb_info_old = input_pose.pdb_info()
+    pdb_info_new = new_pose.pdb_info()
+    if pdb_info_old is not None and pdb_info_new is not None:
+        if resnums is None:
+            resnums = range(
+                1, min(input_pose.total_residue(), new_pose.total_residue()) + 1
+            )
+        for position, resnum in enumerate(list(resnums)[: new_pose.total_residue()], 1):
+            for reslabel in pdb_info_old.get_reslabels(resnum):
+                pdb_info_new.add_reslabel(position, reslabel)
+
+    for scores in (
+        getPoseExtraFloatScores(input_pose),
+        getPoseExtraStringScores(input_pose),
+    ):
+        for name, value in scores.items():
+            setPoseExtraScore(new_pose, name, value)
+
+
 def drain_additional_output(mover):
     """Collects every pose a one-to-many mover produced beyond the one
     already sitting in the pose apply() was given.
@@ -329,24 +368,74 @@ def resolve_work_dir(work_dir_):
     return path.absolute()
 
 
+# Written into a work_dir when its work_dir() block exits without raising.
+# Delete it to make that stage run again.
+SENTINEL_NAME = "rosettalink.finished.ok"
+
+# Work dirs finished in this process. Their sentinels are not honoured.
+finished_work_dirs = set()
+
+# True while a work_dir() block is reusing the output already in its work dir.
+reusing_finished_output = False
+
+
+def is_reusing_finished_output():
+    """Whether the work_dir() block in progress is reusing finished output."""
+    return reusing_finished_output
+
+
+def forget_finished_work_dirs():
+    finished_work_dirs.clear()
+
+
 @contextmanager
 def work_dir(work_dir_=None, tracer_debug=None):
+        """Directory the wrapped program runs in, entered with os.chdir.
+
+        A work_dir is used as given; without one a temporary directory is used
+        and removed on exit. Exiting a work_dir without raising writes
+        SENTINEL_NAME into it. A work_dir carrying a SENTINEL_NAME from an
+        earlier process is reused: run_and_log() skips its command."""
+        global reusing_finished_output
         original_cwd = os.getcwd()
         work_dir_ = resolve_work_dir(work_dir_)
-        temp_dir = tempfile.TemporaryDirectory()
-        run_dir = Path(temp_dir.name)
-        if tracer_debug:
-            tracer_debug << f"Using temporary directory: {run_dir} \n" and tracer_debug.flush()
+        temp_dir = None
 
+        if work_dir_ is None:
+            temp_dir = tempfile.TemporaryDirectory()
+            run_dir = Path(temp_dir.name)
+            if tracer_debug:
+                tracer_debug << f"Using temporary directory: {run_dir} \n" and tracer_debug.flush()
+        else:
+            run_dir = Path(work_dir_)
+            os.makedirs(run_dir, exist_ok=True)
+            if tracer_debug:
+                tracer_debug << f"Using working directory: {run_dir} \n" and tracer_debug.flush()
+
+        reusing = (
+            temp_dir is None
+            and (run_dir / SENTINEL_NAME).is_file()
+            and str(run_dir) not in finished_work_dirs
+        )
+        if reusing and tracer_debug:
+            tracer_debug << (
+                f"Found {SENTINEL_NAME} in {run_dir}, reusing the output of the "
+                f"earlier run \n"
+            ) and tracer_debug.flush()
+
+        outer_reusing = reusing_finished_output
+        reusing_finished_output = reusing
         os.chdir(run_dir)
         try:
             yield run_dir
+        except BaseException:
+            raise
+        else:
+            if temp_dir is None:
+                (run_dir / SENTINEL_NAME).write_text("")
+                finished_work_dirs.add(str(run_dir))
         finally:
-            if work_dir_ is not None:
-                os.makedirs(work_dir_, exist_ok=True)
-                shutil.copytree(run_dir, work_dir_, dirs_exist_ok=True)
-
-            # Cleanup TMP
+            reusing_finished_output = outer_reusing
             os.chdir(original_cwd)
             try:
                 if temp_dir:
@@ -354,7 +443,6 @@ def work_dir(work_dir_=None, tracer_debug=None):
                     if tracer_debug:
                         tracer_debug << f"Cleaned up temporary directory {run_dir} \n" and tracer_debug.flush()
             except Exception:
-                #tracer_debug << f"Failed to clean up {run_dir} \n" and tracer_debug.flush()
                 pass
 
 
