@@ -102,3 +102,32 @@ def run_protocol(tmp_path_factory):
 		return output_dir, rows
 
 	return run
+
+
+@pytest.fixture
+def previous_step():
+	"""Connects a stand-in previous step to a mover, as ParsedProtocol does,
+	whose additional output is the poses given. Keep the returned mover
+	referenced for as long as the connected mover is used."""
+	from pyrosetta.rosetta.protocols.moves import Mover
+
+	class Previous(Mover):
+		def __init__(self, poses):
+			Mover.__init__(self)
+			self.poses = list(poses)
+
+		def get_name(self):
+			return "Previous"
+
+		def apply(self, pose):
+			pass
+
+		def get_additional_output(self):
+			return self.poses.pop(0) if self.poses else None
+
+	def connect(mover, *poses):
+		previous = Previous(poses)
+		mover.set_previous_mover(previous)
+		return previous
+
+	return connect

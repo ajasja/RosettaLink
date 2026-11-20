@@ -134,8 +134,8 @@ on them; `sequence_redesign.xml` shows that.
 
 Every stage receives all the poses of the stage before it, so each external
 program runs once per stage instead of once per pose. This is not optional and
-takes no attribute: the movers inherit `BatchedMultiplePoseMover`, and
-`ParsedProtocol` hands them the set. A stage placed inside a `FOR_EACH_POSE`
+takes no attribute: the movers inherit `AdditionalPosesMover`, and
+`ParsedProtocol` connects them to the step before. A stage placed inside a `FOR_EACH_POSE`
 receives one pose at a time, and works the same way.
 
 `FOR_EACH_POSE` needs a PyRosetta build carrying RosettaCommons/rosetta pull

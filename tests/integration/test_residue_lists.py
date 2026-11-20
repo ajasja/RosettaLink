@@ -76,18 +76,11 @@ def test_a_selector_is_still_accepted(mover):
 	""")
 
 
-def test_a_membrane_selector_refuses_more_than_one_pose(mover, pose):
+def test_a_membrane_selector_refuses_more_than_one_pose(mover, pose, previous_step):
 	from pyrosetta.rosetta.core.select.residue_selector import ChainSelector
-	from pyrosetta.rosetta.utility import (
-		vector1_std_shared_ptr_core_pose_Pose_t as PoseVector,
-	)
 
 	design = mover(transmembrane_buried_selector=ChainSelector("A"))
-
-	batch = PoseVector()
-	batch.append(pose.clone())
-	batch.append(pose.clone())
-	design.set_batched_poses(batch)
+	previous = previous_step(design, pose.clone())
 
 	with pytest.raises(ValueError, match="no _multi parameter"):
 		design.apply(pose.clone())

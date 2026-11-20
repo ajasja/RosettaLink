@@ -2,22 +2,25 @@
 # @brief Base class of every mover that wraps an external program.
 
 import pyrosetta
-from pyrosetta.rosetta.protocols.rosetta_scripts import BatchedMultiplePoseMover
-from pyrosetta.rosetta.utility import vector1_std_shared_ptr_core_pose_Pose_t as PoseVector
+from pyrosetta.rosetta.protocols.moves import AdditionalPosesMover
 
 
-class BaseLinkMover(BatchedMultiplePoseMover):
-    """Subclassing BatchedMultiplePoseMover is what makes ParsedProtocol hand
-    the mover every pose of the step before it, rather than only the one
-    passed to apply(). It needs a PyRosetta build carrying that class."""
+class BaseLinkMover(AdditionalPosesMover):
+    """Inside a ParsedProtocol the mover is connected to the step before it
+    and takes every pose that step produced, not only the one passed to
+    apply(). Needs a PyRosetta build carrying AdditionalPosesMover."""
 
     def take_input_poses(self, pose):
-        """Every pose ParsedProtocol drained from the previous step, or [pose]
-        when it filled nothing in, which is the case for the first step of a
-        protocol and for an apply() called directly.
+        """A clone of pose followed by every pose the previous step has left,
+        or [pose] when there is no previous step, which is the case for the
+        first step of a protocol and for an apply() called directly.
 
-        Empties the list: it lives on the C++ side of the same mover instance
-        and otherwise reaches the next apply() still holding this batch."""
-        poses = list(self.batched_poses())
-        self.set_batched_poses(PoseVector())
-        return poses or [pose]
+        Disconnects the previous step afterwards, so a later apply() of the
+        same instance does not pull from it again. Call it before changing
+        directory: an intervening FOR_EACH_POSE runs its movers and filters
+        while its poses are pulled."""
+        if not self.previous_mover_set():
+            return [pose]
+        poses = [pose.clone()] + list(self.get_next_pose_batch(0))
+        self.set_previous_mover(None)
+        return poses

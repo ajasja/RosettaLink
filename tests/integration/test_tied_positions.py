@@ -115,17 +115,9 @@ def test_the_symmetry_strings_cannot_be_named_on_the_tag(mover):
 			XmlObjects.create_from_string(xml)
 
 
-def test_tied_positions_refuses_more_than_one_pose(mover, dimer):
-	from pyrosetta.rosetta.utility import (
-		vector1_std_shared_ptr_core_pose_Pose_t as PoseVector,
-	)
-
+def test_tied_positions_refuses_more_than_one_pose(mover, dimer, previous_step):
 	design = build('<TiedPositions residues_selectors="chain_A,chain_B"/>')
-
-	batch = PoseVector()
-	batch.append(dimer.clone())
-	batch.append(dimer.clone())
-	design.set_batched_poses(batch)
+	previous = previous_step(design, dimer.clone())
 
 	with pytest.raises(ValueError, match="no _multi parameter for symmetry_residues"):
 		design.apply(dimer.clone())
