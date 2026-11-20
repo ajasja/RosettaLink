@@ -16,13 +16,17 @@
 # Each chain of the pose is folded as its own protein entry (ids A, B, C...
 # in pose order), so a complex is folded as a complex.
 #
+# Every pose the step before produced is folded as its own entry, all of them
+# against one loaded model.
+#
 # fasta folds the records of a file instead of the pose sequence: one pose
 # per record, with chains of a record separated by colons. Each pose carries
 # its record id as the comment fasta_id, and since these structures have no
 # correspondence to the input pose, reslabels and RMSD metrics are skipped.
 #
-# Each prediction is written into work_dir as prediction_<i>.pdb (or .cif)
-# with confidence_<i>.json beside it, then read back into a pose.
+# Each prediction is written into work_dir as prediction_<entry>_<sample>.pdb
+# (or .cif) with confidence_<entry>_<sample>.json beside it, then read back
+# into a pose.
 #
 # Confidence scores (plddt, ptm, iptm, pae, pde) are reported under their own
 # names on whatever scale ESMFold2 produces, not rescaled to match AF2 or
@@ -37,21 +41,19 @@
 # or "all" include sidechains. See resolve_rmsd_atoms in rosettalink.utils.
 
 import json
-import os
-import shutil
-import tempfile
 import time
 from pathlib import Path
 
 import pyrosetta
-from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabelSelector
 from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
+from rosettalink.movers import BaseLinkMover
 from rosettalink.utils import carry_over
 from rosettalink.utils import parse_fasta_records
 from rosettalink.utils import resolve_rmsd_atoms
 from rosettalink.utils import setup_tracer
+from rosettalink.utils import work_dir
 
 # Spelling of the model class has varied between esm releases.
 MODEL_CLASS_NAMES = ("EsmFold2Model", "ESMFold2Model")
@@ -61,6 +63,10 @@ MODEL_CLASS_NAMES = ("EsmFold2Model", "ESMFold2Model")
 # card documents pLDDT on 0-100 while its own examples print values on 0-1,
 # so nothing here is rescaled to match AF2 or Boltz.
 CONFIDENCE_KEYS = ("plddt", "ptm", "iptm", "pae", "pde")
+
+# Per residue confidence values a metric subtag averages over a selection:
+# plddt one value per residue, pae and pde a residue by residue matrix.
+PER_RESIDUE_QUANTITIES = ("plddt", "pae", "pde")
 
 # Loaded models, keyed by (model, device). Module level rather than per
 # instance because RosettaScripts clones movers - a MultiplePoseMover hands
@@ -198,6 +204,20 @@ def to_scalar(value):
         return None
 
 
+def per_residue_values(sample, quantity):
+    """The confidence array of one sample for one quantity, before it is
+    reduced to a scalar. None when the sample carries no such array."""
+    value = sample.get(quantity) if isinstance(sample, dict) else getattr(sample, quantity, None)
+    if value is None:
+        return None
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        value = tolist()
+    if not isinstance(value, (list, tuple)):
+        return None
+    return value
+
+
 def confidence_scores(sample):
     """Scalar confidence metrics of one sample, keyed as in CONFIDENCE_KEYS.
     Per-residue arrays are reduced to their mean."""
@@ -231,7 +251,7 @@ def parse_fold_kwargs(text):
     return kwargs
 
 
-class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
+class ESMFold2(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
     def __init__(
@@ -247,10 +267,10 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
         prefix_name="ESMFold2_",
         replace_pose="1",
         work_dir=None,
-        delete_dir=None,
     ):
-        pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
+        BaseLinkMover.BaseLinkMover.__init__(self)
         self.rmsd_metrics = []
+        self.confidence_metrics = []
 
         self.model_ = model
         self.device_ = device
@@ -263,7 +283,6 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
         self.prefix_name_ = prefix_name
         self.replace_pose_ = replace_pose
         self.work_dir_ = work_dir
-        self.delete_dir_ = delete_dir
         # Populated by apply(): every sample beyond the first
         # (num_diffusion_samples > 1), exposed via the standard
         # Mover::get_additional_output() mechanism - same one-to-many pattern
@@ -285,7 +304,6 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
             f"\tprefix_name: {self.prefix_name_}\n"
             f"\treplace_pose: {self.replace_pose_}\n"
             f"\twork_dir: {self.work_dir_}\n"
-            f"\tdelete_dir: {self.delete_dir_}\n"
         ) and self.tracer_info.flush()
 
     def clone(self):
@@ -301,30 +319,15 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
         copy.prefix_name_ = self.prefix_name_
         copy.replace_pose_ = self.replace_pose_
         copy.work_dir_ = self.work_dir_
-        copy.delete_dir_ = self.delete_dir_
         copy.rmsd_metrics = self.rmsd_metrics.copy()
+        copy.confidence_metrics = self.confidence_metrics.copy()
         ESMFold2.clones_.append(copy)
         return copy
 
     def apply(self, pose):
-        # --- working directory --- #
-        # Fresh, self-cleaning temp directory every call (or a fresh
-        # subdirectory of a configured work_dir) - never stored back onto
-        # self.work_dir_, so this mover instance can safely be applied more
-        # than once (e.g. from a RosettaScripts MultiplePoseMover).
-        if self.work_dir_ is None or self.work_dir_ == "":
-            temp_dir = tempfile.TemporaryDirectory()
-            run_dir = Path(temp_dir.name)
-            self.tracer_info << f"No working directory specified, using temporary directory: {run_dir}\n" and self.tracer_info.flush()
-        else:
-            temp_dir = None
-            os.makedirs(self.work_dir_, exist_ok=True)
-            run_dir = Path(tempfile.mkdtemp(dir=self.work_dir_))
-
-        # Keep a copy of the pose as handed to us: source of reslabels to
-        # carry forward (the predicted structure carries none) and the
-        # comparison pose for the RMSD block below.
-        input_pose = pose.clone()
+        # Every pose the step before produced, or just the one passed in.
+        # Taken first: pulling runs an intervening FOR_EACH_POSE.
+        input_poses = self.take_input_poses(pose)
 
         # --- INPUT --- #
         # One protein entry per chain, in pose order, so a complex is folded
@@ -332,15 +335,28 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
         # A, B, C... in that same order, which keeps the residue numbering of
         # the prediction aligned with the input pose.
         #
-        # With fasta set, the sequences come from the file instead and the
-        # pose is only the vehicle for the first result.
+        # One entry per input pose, all folded against one loaded model. With
+        # fasta set, the sequences come from the file instead.
+        #
+        # record_poses holds the pose each entry was folded from: the source
+        # of the reslabels carried forward (the predicted structure carries
+        # none) and the comparison pose for the RMSD block. A fasta record has
+        # no input pose, so its entry is None.
         if self.fasta_:
             records = parse_fasta_records(self.fasta_)
+            record_poses = [None] * len(records)
             self.tracer_info << (
                 f"Folding {len(records)} record(s) from {self.fasta_}\n"
             ) and self.tracer_info.flush()
         else:
-            records = [(None, [chain.sequence() for chain in pose.split_by_chain()])]
+            records = [
+                (None, [chain.sequence() for chain in input_pose.split_by_chain()])
+                for input_pose in input_poses
+            ]
+            record_poses = list(input_poses)
+            self.tracer_info << (
+                f"Folding {len(records)} pose(s) against one loaded model\n"
+            ) and self.tracer_info.flush()
 
         options = {
             "num_loops": int(self.num_loops_),
@@ -354,67 +370,72 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
             # without a change to this mover.
             options.update(parse_fold_kwargs(self.fold_kwargs_))
 
-        # --- RUN ESMFOLD2 --- #
-        model = load_model(self.model_, self.device_, self.tracer_info)
+        with work_dir(self.work_dir_, self.tracer_debug) as run_dir:
+            # We are already in run_dir at this point, so every prediction is
+            # written beside the one before it under a relative name.
+            # --- RUN ESMFOLD2 --- #
+            model = load_model(self.model_, self.device_, self.tracer_info)
 
-        # --- OUTPUT STRUCTURES --- #
-        # Written to disk before being read back, so the raw tool output of a
-        # run stays available for inspection.
-        designed_poses = []
-        for record_id, sequences in records:
-            chains = [
-                {"id": chr(ord("A") + chain_index), "sequence": sequence}
-                for chain_index, sequence in enumerate(sequences)
-            ]
-            label = f"{record_id} " if record_id else ""
+            # --- OUTPUT STRUCTURES --- #
+            # Written to disk before being read back, so the raw tool output
+            # of a run stays available for inspection.
+            designed_poses = []
+            for record_index, ((record_id, sequences), record_pose) in enumerate(
+                zip(records, record_poses)
+            ):
+                chains = [
+                    {"id": chr(ord("A") + chain_index), "sequence": sequence}
+                    for chain_index, sequence in enumerate(sequences)
+                ]
+                label = f"{record_id} " if record_id else ""
 
-            self.tracer_info << (
-                f"Folding {label}({len(chains)} chain(s)) with {options}\n"
-            ) and self.tracer_info.flush()
-            started = time.perf_counter()
-            samples = as_samples(fold(model, chains, options))
-            self.tracer_info << (
-                f"Folded {label}into {len(samples)} sample(s) "
-                f"in {time.perf_counter() - started:.1f}s\n"
-            ) and self.tracer_info.flush()
-
-            for sample_index, sample in enumerate(samples):
-                text, suffix = structure_text(model, sample)
-                stem = f"{record_id}_{sample_index}" if record_id else f"{sample_index}"
-                structure_file = run_dir / f"prediction_{stem}{suffix}"
-                structure_file.write_text(text)
-
-                scores = confidence_scores(sample)
-                confidence_file = run_dir / f"confidence_{stem}.json"
-                with open(confidence_file, "w") as f:
-                    json.dump(scores, f, indent=2)
                 self.tracer_info << (
-                    f"Wrote {structure_file} and {confidence_file}\n"
+                    f"Folding {label}({len(chains)} chain(s)) with {options}\n"
+                ) and self.tracer_info.flush()
+                started = time.perf_counter()
+                samples = as_samples(fold(model, chains, options))
+                self.tracer_info << (
+                    f"Folded {label}into {len(samples)} sample(s) "
+                    f"in {time.perf_counter() - started:.1f}s\n"
                 ) and self.tracer_info.flush()
 
-                designed_poses.append(
-                    self._load_and_label_design(structure_file, scores, input_pose, record_id)
-                )
+                for sample_index, sample in enumerate(samples):
+                    text, suffix = structure_text(model, sample)
+                    stem = (
+                        f"{record_id}_{sample_index}"
+                        if record_id
+                        else f"{record_index}_{sample_index}"
+                    )
+                    structure_file = Path(f"prediction_{stem}{suffix}")
+                    structure_file.write_text(text)
 
-        # Primary output: same convention as the other movers - the pose the
-        # caller already holds a reference to gets the first result.
-        pose.assign(designed_poses[0])
+                    scores = confidence_scores(sample)
+                    confidence_file = Path(f"confidence_{stem}.json")
+                    with open(confidence_file, "w") as f:
+                        json.dump(scores, f, indent=2)
+                    self.tracer_info << (
+                        f"Wrote {structure_file} and {confidence_file} in {run_dir}\n"
+                    ) and self.tracer_info.flush()
 
-        # Every further result (more records, or num_diffusion_samples > 1)
-        # is handed off through Mover::get_additional_output(), the standard
-        # Rosetta one-to-many mechanism, instead of being silently discarded.
-        self.additional_poses_ = list(designed_poses[1:])
+                    arrays = {
+                        quantity: per_residue_values(sample, quantity)
+                        for quantity in PER_RESIDUE_QUANTITIES
+                    }
+                    designed_poses.append(
+                        self._load_and_label_design(
+                            structure_file, scores, record_pose, record_id, arrays
+                        )
+                    )
 
-        # --- CLEANUP --- #
-        try:
-            if temp_dir:
-                temp_dir.cleanup()
-                self.tracer_info << f"Cleaned up temporary directory: {run_dir}\n" and self.tracer_info.flush()
-            elif self.delete_dir_:
-                shutil.rmtree(run_dir)
-                self.tracer_info << f"Deleted run directory: {run_dir}\n" and self.tracer_info.flush()
-        except Exception:
-            self.tracer_error << f"Failed to clean up run directory: {run_dir}\n" and self.tracer_error.flush()
+            # Primary output: same convention as the other movers - the pose
+            # the caller already holds a reference to gets the first result.
+            pose.assign(designed_poses[0])
+
+            # Every further result (more input poses or records, or
+            # num_diffusion_samples > 1) is handed off through
+            # Mover::get_additional_output(), the standard Rosetta one-to-many
+            # mechanism, instead of being silently discarded.
+            self.additional_poses_ = list(designed_poses[1:])
 
     @staticmethod
     def _pose_from_structure_file(structure_file):
@@ -432,7 +453,7 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
             pyrosetta.rosetta.core.import_pose.pose_from_file(pose, str(structure_file))
         return pose
 
-    def _load_and_label_design(self, structure_file, scores, input_pose, record_id=None):
+    def _load_and_label_design(self, structure_file, scores, input_pose, record_id=None, arrays=None):
         """Load one predicted structure, carry over reslabels from the input
         pose, attach its confidence scores, and compute any configured RMSD
         metrics. If replace_pose is false, the returned pose keeps the
@@ -449,6 +470,7 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
                 score_name = f"{self.prefix_name_}{key}"
                 setPoseExtraScore(pose, score_name, float(value))
                 self.tracer_info << f"\t{record_id} {score_name}: {value}\n" and self.tracer_info.flush()
+            self._attach_confidence_metrics(pose, arrays, record_id)
             if self.rmsd_metrics:
                 self.tracer_warning << (
                     "Skipping RMSD metrics: structures folded from a fasta have no "
@@ -473,46 +495,49 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
             self.tracer_info << f"\t{score_name}: {value}\n" and self.tracer_info.flush()
 
         # --- RMSD METRICS --- #
+        self._attach_rmsd_metrics(pose, input_pose)
+
+        # --- CONFIDENCE METRICS --- #
+        self._attach_confidence_metrics(pose, arrays)
+
+        return pose
+
+    def _attach_rmsd_metrics(self, prediction, input_pose):
+        """Computes every configured <RMSD> between the prediction and the
+        pose it was folded from.
+
+        calculation_selector picks the residues it is measured over and
+        alignment_selector the residues the structures are superimposed on.
+        The prediction keeps the numbering of the pose it was folded from, so
+        one selector reads the same residues on both."""
         for rmsd in self.rmsd_metrics:
-            # reslabel_input selects on the pose the mover was handed,
-            # reslabel_prediction on the prediction.
-            residue_selector_input = ResiduePDBInfoHasLabelSelector(rmsd["reslabel_input"])
-            residue_selector_prediction = ResiduePDBInfoHasLabelSelector(rmsd["reslabel_prediction"])
-
-            # reslabel_superimpose, when set, superimposes over a different
-            # set of residues than the RMSD is measured over - e.g. align on
-            # a fixed target chain and measure a designed binder, which
-            # reports placement rather than fold alone. Defaults to the
-            # measured residues.
-            superimpose_label = rmsd.get("reslabel_superimpose", "")
-            residue_selector_super = (
-                ResiduePDBInfoHasLabelSelector(superimpose_label) if superimpose_label else None
-            )
-
-            # A label that matches no residue (e.g. motif on a design with no
-            # scaffolded motif) would otherwise be an RMSD over nothing.
-            # Skip it and leave the score unset rather than fail the run.
-            selections = [
-                (rmsd["reslabel_input"], residue_selector_input, input_pose),
-                (rmsd["reslabel_prediction"], residue_selector_prediction, pose),
-            ]
-            if residue_selector_super is not None:
-                selections.append((superimpose_label, residue_selector_super, pose))
-            empty_labels = [
-                label for label, selector, target in selections if sum(selector.apply(target)) == 0
-            ]
-            if empty_labels:
+            measured = self.selected_positions(prediction, rmsd["calculation"])
+            if not measured:
                 self.tracer_warning << (
-                    f"Skipping RMSD {rmsd['name']}: label(s) {empty_labels} select no residues\n"
+                    f"Skipping RMSD {rmsd['name']}: calculation_selector picks no "
+                    f"residue of the prediction\n"
                 ) and self.tracer_warning.flush()
                 continue
+            measured_selector = self.index_selector(measured)
+
+            superimpose = None
+            if rmsd["alignment"] is not None:
+                aligned = self.selected_positions(prediction, rmsd["alignment"])
+                if not aligned:
+                    self.tracer_warning << (
+                        f"Skipping RMSD {rmsd['name']}: alignment_selector picks no "
+                        f"residue of the prediction\n"
+                    ) and self.tracer_warning.flush()
+                    continue
+                superimpose = self.index_selector(aligned)
 
             rmsd_metric = pyrosetta.rosetta.core.simple_metrics.metrics.RMSDMetric()
-            rmsd_metric.set_residue_selector(residue_selector_prediction)
-            rmsd_metric.set_residue_selector_reference(residue_selector_input)
+            rmsd_metric.set_residue_selector(measured_selector)
+            rmsd_metric.set_residue_selector_reference(measured_selector)
             rmsd_metric.set_comparison_pose(input_pose)
-            if residue_selector_super is not None:
-                rmsd_metric.set_residue_selector_super(residue_selector_super)
+            if superimpose is not None:
+                rmsd_metric.set_residue_selector_super(superimpose)
+                rmsd_metric.set_residue_selector_super_reference(superimpose)
             # RMSDMetric does not align by default, which for a prediction in
             # its own reference frame measures the frame offset rather than
             # any structural difference.
@@ -521,12 +546,35 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
             # defaults to all heavy atoms, i.e. sidechains included.
             rmsd_metric.set_rmsd_type(resolve_rmsd_atoms(rmsd["atoms"]))
 
-            rmsd_value = rmsd_metric.calculate(pose)
+            rmsd_value = rmsd_metric.calculate(prediction)
             rmsd_name = f"{self.prefix_name_}{rmsd['name']}"
-            setPoseExtraScore(pose, rmsd_name, rmsd_value)
+            setPoseExtraScore(prediction, rmsd_name, rmsd_value)
             self.tracer_info << f"\t{rmsd_name}: {rmsd_value}\n" and self.tracer_info.flush()
 
-        return pose
+    def _attach_confidence_metrics(self, prediction, arrays, record_id=None):
+        """Computes every configured <metric>: one per residue confidence
+        value of the sample, averaged over the residues the metric's selector
+        picks."""
+        label = f"{record_id} " if record_id else ""
+        for metric in self.confidence_metrics:
+            values = (arrays or {}).get(metric["quantity"])
+            if values is None:
+                self.tracer_warning << (
+                    f"Skipping metric {metric['name']}: the sample carries no "
+                    f"{metric['quantity']}\n"
+                ) and self.tracer_warning.flush()
+                continue
+
+            value = self.averaged_over_selection(prediction, metric["selector"], values)
+            if value is None:
+                self.tracer_warning << (
+                    f"Skipping metric {metric['name']}: its selector picks no residue\n"
+                ) and self.tracer_warning.flush()
+                continue
+
+            score_name = f"{self.prefix_name_}{metric['name']}"
+            setPoseExtraScore(prediction, score_name, value)
+            self.tracer_info << f"\t{label}{score_name}: {value}\n" and self.tracer_info.flush()
 
     def get_additional_output(self):
         # Pull-one-at-a-time: pops and returns one additional sample per
@@ -553,7 +601,6 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
         self.prefix_name_ = tag.get_option_string("prefix_name") if tag.hasOption("prefix_name") else "ESMFold2_"
         self.replace_pose_ = tag.get_option_bool("replace_pose") if tag.hasOption("replace_pose") else True
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
-        self.delete_dir_ = tag.get_option_bool("delete_dir") if tag.hasOption("delete_dir") else False
 
         # Reject an unparseable fold_kwargs here rather than after the model
         # has already been loaded.
@@ -572,31 +619,27 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
             f"\tprefix_name: {self.prefix_name_}\n"
             f"\treplace_pose: {self.replace_pose_}\n"
             f"\twork_dir: {self.work_dir_}\n"
-            f"\tdelete_dir: {self.delete_dir_}\n"
         ) and self.tracer_info.flush()
 
         # RMSD metrics (same nested tag as ColabFold and Boltz2)
         for child in tag.getTags():
             if child.getName() == "RMSD":
-                self.rmsd_metrics.append({
-                    "name": child.get_option_string("name"),
-                    "reslabel_input": child.get_option_string("reslabel_input"),
-                    "reslabel_prediction": child.get_option_string("reslabel_prediction"),
-                    "reslabel_superimpose": (
-                        child.get_option_string("reslabel_superimpose")
-                        if child.hasOption("reslabel_superimpose") else ""
-                    ),
-                    "atoms": (
-                        child.get_option_string("atoms")
-                        if child.hasOption("atoms") else "ca"
-                    ),
-                })
+                self.rmsd_metrics.append(self.parse_rmsd_tag(child, data))
+            elif child.getName() == "metric":
+                self.confidence_metrics.append(
+                    self.parse_metric_tag(child, data, PER_RESIDUE_QUANTITIES)
+                )
         # Reject an unknown atoms= value here rather than after the
         # prediction has already run.
         for rmsd in self.rmsd_metrics:
             resolve_rmsd_atoms(rmsd["atoms"])
         rmsd_names = [f"{rmsd['name']} (atoms={rmsd['atoms']})" for rmsd in self.rmsd_metrics]
         self.tracer_info << f"RMSD metrics found: {rmsd_names}\n" and self.tracer_info.flush()
+        metric_names = [
+            f"{metric['name']} ({metric['quantity']})"
+            for metric in self.confidence_metrics
+        ]
+        self.tracer_info << f"Confidence metrics found: {metric_names}\n" and self.tracer_info.flush()
 
     @staticmethod
     def mover_name():
@@ -664,11 +707,6 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
             XMLSchemaType(xs_string),
             "Parent directory under which each apply call gets its own fresh subdirectory holding the predicted structures and their confidence json (so this mover instance can safely be applied more than once, e.g. from a RosettaScripts MultiplePoseMover). If not provided, a new temporary directory is used per call instead. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
             ""))
-        attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "delete_dir",
-            XMLSchemaType(xs_boolean),
-            "Whether to delete this call run subdirectory after every sample has been read from disk into the primary pose or the additional-output poses",
-            "false"))
 
         rmsd_attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
         rmsd_attrlist.append(
@@ -679,24 +717,18 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
             )
         )
         rmsd_attrlist.append(
-            XMLSchemaAttribute.required_attribute(
-                "reslabel_input",
+            XMLSchemaAttribute.attribute_w_default(
+                "calculation_selector",
                 XMLSchemaType(xs_string),
-                "Residue label in input over which RMSD is calculated"
-            )
-        )
-        rmsd_attrlist.append(
-            XMLSchemaAttribute.required_attribute(
-                "reslabel_prediction",
-                XMLSchemaType(xs_string),
-                "Residue label in prediction over which RMSD is calculated"
+                "Name of a residue selector naming the residues the RMSD is measured over, on both the prediction and the pose it was folded from. Every residue when not set",
+                ""
             )
         )
         rmsd_attrlist.append(
             XMLSchemaAttribute.attribute_w_default(
-                "reslabel_superimpose",
+                "alignment_selector",
                 XMLSchemaType(xs_string),
-                "Residue label to superimpose over, when it should differ from the residues the RMSD is measured over. For example superimpose on a fixed target chain and measure a designed binder, which reports how well the binder is placed and not only how well it folds. Defaults to the measured residues.",
+                "Name of a residue selector naming the residues the structures are superimposed on, when that should differ from the residues the RMSD is measured over. For example superimpose on a fixed target chain and measure a designed binder, which reports how well the binder is placed and not only how well it folds. Defaults to the measured residues",
                 ""
             )
         )
@@ -711,8 +743,33 @@ class ESMFold2(pyrosetta.rosetta.protocols.moves.Mover):
 
         description = "Runs ESMFold2 to predict protein structures, as an alternative to ColabFold and Boltz2. Requires esm installed alongside PyRosetta."
 
+        metric_attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
+        metric_attrlist.append(
+            XMLSchemaAttribute.required_attribute(
+                "name",
+                XMLSchemaType(xs_string),
+                "Score key this metric is reported under, after prefix_name"
+            )
+        )
+        metric_attrlist.append(
+            XMLSchemaAttribute.required_attribute(
+                "base_metric",
+                XMLSchemaType(xs_string),
+                "Which per residue confidence value is averaged: plddt, pae or pde. pae and pde are residue by residue matrices, so a selection averages the block where both residues are selected"
+            )
+        )
+        metric_attrlist.append(
+            XMLSchemaAttribute.attribute_w_default(
+                "selector",
+                XMLSchemaType(xs_string),
+                "Name of a residue selector naming the residues the confidence value is averaged over. Every residue when not set",
+                ""
+            )
+        )
+
         subelements = pyrosetta.rosetta.utility.tag.XMLSchemaSimpleSubelementList()
-        subelements.add_simple_subelement("RMSD", rmsd_attrlist, "RMSD applied over specified residue label")
+        subelements.add_simple_subelement("RMSD", rmsd_attrlist, "Self consistency RMSD between the prediction and the pose it was folded from")
+        subelements.add_simple_subelement("metric", metric_attrlist, "Confidence value averaged over the residues a selector picks")
         pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes_and_repeatable_subelements(
             xsd, cls.mover_name(), description, attrlist, subelements)
 

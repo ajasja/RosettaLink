@@ -18,6 +18,9 @@
 # Each chain of the pose is written as its own protein entry (ids A, B, C...
 # in pose order), so a complex is folded as a complex.
 #
+# Every pose the step before produced is written as its own entry, and all of
+# them are folded in one boltz invocation.
+#
 # fasta folds the records of a file instead of the pose sequence: one pose
 # per record, with chains of a record separated by colons. All records are
 # folded in one boltz invocation. Each pose carries its record id as the
@@ -27,6 +30,11 @@
 # Confidence scores (confidence_score, ptm, iptm, complex_plddt,
 # complex_iplddt, complex_pde, complex_ipde) are reported on Boltz native
 # 0-1 scale under their own names, not rescaled to match AF2 pLDDT.
+#
+# A metric subtag reports one per residue confidence value averaged over the
+# residues a selector picks: base_metric is plddt, pae or pde. pae and pde are
+# residue by residue matrices, so a selection averages the block where both
+# residues are selected.
 #
 # Nested <RMSD> tags compare the prediction against the pose the mover was
 # handed, over residues carrying the given labels. The structures are
@@ -38,23 +46,27 @@
 
 import json
 import os
-import shutil
-import tempfile
 from pathlib import Path
 
+import numpy as np
 import pyrosetta
-from pyrosetta.rosetta.core.select.residue_selector import ResiduePDBInfoHasLabelSelector
 from pyrosetta.rosetta.core.pose import setPoseExtraScore
 
 from rosettalink.decorators import register_mover
+from rosettalink.movers import BaseLinkMover
 from rosettalink.utils import carry_over
 from rosettalink.utils import parse_fasta_records
 from rosettalink.utils import resolve_rmsd_atoms
 from rosettalink.utils import run_and_log
 from rosettalink.utils import setup_tracer
+from rosettalink.utils import work_dir
+
+# Per residue confidence arrays boltz writes beside each prediction, which a
+# metric subtag averages over a selection.
+PER_RESIDUE_QUANTITIES = ("plddt", "pae", "pde")
 
 
-class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
+class Boltz2(BaseLinkMover.BaseLinkMover):
     clones_ = list()
 
     def __init__(
@@ -70,10 +82,10 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         replace_pose="1",
         extra_args=None,
         work_dir=None,
-        delete_dir=None,
     ):
-        pyrosetta.rosetta.protocols.moves.Mover.__init__(self)
+        BaseLinkMover.BaseLinkMover.__init__(self)
         self.rmsd_metrics = []
+        self.confidence_metrics = []
 
         self.cmd_header_ = cmd_header
         self.cache_ = cache
@@ -86,7 +98,6 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         self.replace_pose_ = replace_pose
         self.extra_args_ = extra_args
         self.work_dir_ = work_dir
-        self.delete_dir_ = delete_dir
         # Populated by apply(): every design beyond the first (diffusion_samples > 1),
         # exposed via the standard Mover::get_additional_output() mechanism -
         # same one-to-many pattern as RFdiffusion/LigandMPNN.
@@ -107,7 +118,6 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
             f"\treplace_pose: {self.replace_pose_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
-            f"\tdelete_dir: {self.delete_dir_}\n"
         ) and self.tracer_info.flush()
 
     def clone(self):
@@ -123,30 +133,15 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         copy.replace_pose_ = self.replace_pose_
         copy.extra_args_ = self.extra_args_
         copy.work_dir_ = self.work_dir_
-        copy.delete_dir_ = self.delete_dir_
         copy.rmsd_metrics = self.rmsd_metrics.copy()
+        copy.confidence_metrics = self.confidence_metrics.copy()
         Boltz2.clones_.append(copy)
         return copy
 
     def apply(self, pose):
-        # --- working directory --- #
-        # Fresh, self-cleaning temp directory every call (or a fresh
-        # subdirectory of a configured work_dir) - never stored back onto
-        # self.work_dir_, so this mover instance can safely be applied more
-        # than once (e.g. from a RosettaScripts MultiplePoseMover).
-        if self.work_dir_ is None or self.work_dir_ == "":
-            temp_dir = tempfile.TemporaryDirectory()
-            run_dir = Path(temp_dir.name)
-            self.tracer_info << f"No working directory specified, using temporary directory: {run_dir}\n" and self.tracer_info.flush()
-        else:
-            temp_dir = None
-            os.makedirs(self.work_dir_, exist_ok=True)
-            run_dir = Path(tempfile.mkdtemp(dir=self.work_dir_))
-
-        # Keep a copy of the pose as handed to us: source of reslabels to
-        # carry forward (boltz output pdbs carry no pdb_info at all) and the
-        # comparison pose for the RMSD block below.
-        input_pose = pose.clone()
+        # Every pose the step before produced, or just the one passed in.
+        # Taken first: pulling runs an intervening FOR_EACH_POSE.
+        input_poses = self.take_input_poses(pose)
 
         # --- INPUT YAML --- #
         # One yaml per entry, each with one protein entry per chain, so a
@@ -154,103 +149,106 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         # Chain ids are assigned A, B, C... in that order, which keeps the
         # residue numbering of the prediction aligned with the input pose.
         #
-        # With fasta set the entries come from the file, one per record, and
-        # boltz is pointed at the directory holding them so all of them are
-        # folded in one invocation. Otherwise there is a single entry named
-        # input, taken from the pose.
+        # boltz is pointed at the directory holding the yamls, so every entry
+        # is folded in one invocation. With fasta set the entries come from
+        # that file; otherwise there is one entry per input pose.
+        #
+        # record_poses holds the pose each entry was written from: the source
+        # of the reslabels carried forward (boltz output pdbs carry no
+        # pdb_info at all) and the comparison pose for the RMSD block. A
+        # fasta record has no input pose, so its entry is None.
         if self.fasta_:
             records = parse_fasta_records(self.fasta_)
-            input_path = run_dir / "inputs"
-            os.makedirs(input_path, exist_ok=True)
+            record_poses = [None] * len(records)
             self.tracer_info << (
                 f"Folding {len(records)} record(s) from {self.fasta_}\n"
             ) and self.tracer_info.flush()
         else:
-            records = [("input", [chain.sequence() for chain in pose.split_by_chain()])]
-            input_path = run_dir / "input.yaml"
-
-        for entry_name, chain_sequences in records:
-            yaml_path = (
-                input_path / f"{entry_name}.yaml" if self.fasta_ else input_path
-            )
-            with open(yaml_path, "w") as f:
-                f.write("version: 1\n")
-                f.write("sequences:\n")
-                for chain_index, sequence in enumerate(chain_sequences):
-                    f.write("  - protein:\n")
-                    f.write(f"      id: {chr(ord('A') + chain_index)}\n")
-                    f.write(f"      sequence: \"{sequence}\"\n")
-                    if not self.use_msa_server_:
-                        # Single-sequence mode requires this sentinel, not
-                        # just omitting the msa field.
-                        f.write("      msa: empty\n")
+            records = [
+                (f"design_{index}", [chain.sequence() for chain in input_pose.split_by_chain()])
+                for index, input_pose in enumerate(input_poses)
+            ]
+            record_poses = list(input_poses)
             self.tracer_info << (
-                f"Writing {len(chain_sequences)} chain(s) to {yaml_path}\n"
+                f"Folding {len(records)} pose(s) in one invocation\n"
             ) and self.tracer_info.flush()
 
-        # --- RUN BOLTZ --- #
-        boltz_cmd_str = f"{self.cmd_header_} {input_path} --out_dir {run_dir} --output_format pdb"
-        if self.cache_:
-            boltz_cmd_str += f" --cache {self.cache_}"
-        if self.use_msa_server_:
-            boltz_cmd_str += " --use_msa_server"
-        if self.diffusion_samples_:
-            boltz_cmd_str += f" --diffusion_samples {self.diffusion_samples_}"
-        if self.recycling_steps_:
-            boltz_cmd_str += f" --recycling_steps {self.recycling_steps_}"
-        if self.sampling_steps_:
-            boltz_cmd_str += f" --sampling_steps {self.sampling_steps_}"
-        if self.extra_args_:
-            boltz_cmd_str += f" {self.extra_args_}"
+        with work_dir(self.work_dir_, self.tracer_debug) as run_dir:
+            # We are already in run_dir at this point, so every path handed to
+            # boltz stays relative to it.
+            input_path = Path("inputs")
+            os.makedirs(input_path, exist_ok=True)
 
-        self.tracer_info << f"Running Boltz2: {boltz_cmd_str}\n" and self.tracer_info.flush()
-        run_and_log(boltz_cmd_str, self.tracer_info, self.tracer_error)
+            for entry_name, chain_sequences in records:
+                yaml_path = input_path / f"{entry_name}.yaml"
+                with open(yaml_path, "w") as f:
+                    f.write("version: 1\n")
+                    f.write("sequences:\n")
+                    for chain_index, sequence in enumerate(chain_sequences):
+                        f.write("  - protein:\n")
+                        f.write(f"      id: {chr(ord('A') + chain_index)}\n")
+                        f.write(f"      sequence: \"{sequence}\"\n")
+                        if not self.use_msa_server_:
+                            # Single-sequence mode requires this sentinel, not
+                            # just omitting the msa field.
+                            f.write("      msa: empty\n")
+                self.tracer_info << (
+                    f"Writing {len(chain_sequences)} chain(s) to {yaml_path}\n"
+                ) and self.tracer_info.flush()
 
-        # --- OUTPUT PDBS --- #
-        # Glob for **/predictions/... rather than a fixed path, since boltz
-        # nests predictions/ under an extra directory of its own choosing.
-        # Entries are walked in input order so the poses come back in the
-        # order the records were given.
-        designed_poses = []
-        for entry_name, _ in records:
-            pdb_files = sorted(
-                run_dir.glob(f"**/predictions/{entry_name}/{entry_name}_model_*.pdb")
-            )
-            if not pdb_files:
-                self.tracer_error << (
-                    f"No boltz output pdb files found for {entry_name} under {run_dir}\n"
-                ) and self.tracer_error.flush()
-                raise RuntimeError(
-                    f"No boltz output pdb files found for {entry_name} under {run_dir}"
+            # --- RUN BOLTZ --- #
+            boltz_cmd_str = f"{self.cmd_header_} {input_path} --out_dir . --output_format pdb"
+            if self.cache_:
+                boltz_cmd_str += f" --cache {self.cache_}"
+            if self.use_msa_server_:
+                boltz_cmd_str += " --use_msa_server"
+            if self.diffusion_samples_:
+                boltz_cmd_str += f" --diffusion_samples {self.diffusion_samples_}"
+            if self.recycling_steps_:
+                boltz_cmd_str += f" --recycling_steps {self.recycling_steps_}"
+            if self.sampling_steps_:
+                boltz_cmd_str += f" --sampling_steps {self.sampling_steps_}"
+            if self.extra_args_:
+                boltz_cmd_str += f" {self.extra_args_}"
+
+            self.tracer_info << f"Running Boltz2: {boltz_cmd_str}\n" and self.tracer_info.flush()
+            run_and_log(boltz_cmd_str, self.tracer_info, self.tracer_error)
+
+            # --- OUTPUT PDBS --- #
+            # Glob for **/predictions/... rather than a fixed path, since boltz
+            # nests predictions/ under an extra directory of its own choosing.
+            # Entries are walked in input order so the poses come back in the
+            # order the records were given.
+            output_dir = Path(".")
+            designed_poses = []
+            for (entry_name, _), record_pose in zip(records, record_poses):
+                pdb_files = sorted(
+                    output_dir.glob(f"**/predictions/{entry_name}/{entry_name}_model_*.pdb")
                 )
-            self.tracer_info << (
-                f"Boltz output pdb files for {entry_name}: {[str(p) for p in pdb_files]}\n"
-            ) and self.tracer_info.flush()
-            record_id = entry_name if self.fasta_ else None
-            designed_poses.extend(
-                self._load_and_label_design(pdb_file, input_pose, record_id)
-                for pdb_file in pdb_files
-            )
+                if not pdb_files:
+                    self.tracer_error << (
+                        f"No boltz output pdb files found for {entry_name} under {run_dir}\n"
+                    ) and self.tracer_error.flush()
+                    raise RuntimeError(
+                        f"No boltz output pdb files found for {entry_name} under {run_dir}"
+                    )
+                self.tracer_info << (
+                    f"Boltz output pdb files for {entry_name}: {[str(p) for p in pdb_files]}\n"
+                ) and self.tracer_info.flush()
+                record_id = entry_name if self.fasta_ else None
+                designed_poses.extend(
+                    self._load_and_label_design(pdb_file, record_pose, record_id)
+                    for pdb_file in pdb_files
+                )
 
-        # Primary output: same convention as RFdiffusion/LigandMPNN - the
-        # pose the caller already holds a reference to gets the first design.
-        pose.assign(designed_poses[0])
+            # Primary output: same convention as RFdiffusion/LigandMPNN - the
+            # pose the caller already holds a reference to gets the first design.
+            pose.assign(designed_poses[0])
 
-        # Every further sample (diffusion_samples > 1) is handed off through
-        # Mover::get_additional_output(), the standard Rosetta one-to-many
-        # mechanism, instead of being silently discarded.
-        self.additional_poses_ = list(designed_poses[1:])
-
-        # --- CLEANUP --- #
-        try:
-            if temp_dir:
-                temp_dir.cleanup()
-                self.tracer_info << f"Cleaned up temporary directory: {run_dir}\n" and self.tracer_info.flush()
-            elif self.delete_dir_:
-                shutil.rmtree(run_dir)
-                self.tracer_info << f"Deleted run directory: {run_dir}\n" and self.tracer_info.flush()
-        except Exception:
-            self.tracer_error << f"Failed to clean up run directory: {run_dir}\n" and self.tracer_error.flush()
+            # Every further design (more input poses, or diffusion_samples > 1)
+            # is handed off through Mover::get_additional_output(), the standard
+            # Rosetta one-to-many mechanism, instead of being silently discarded.
+            self.additional_poses_ = list(designed_poses[1:])
 
     def _attach_confidence(self, pose, pdb_file, record_id=None):
         """Reads the confidence json boltz writes beside pdb_file and
@@ -282,6 +280,7 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
             pose = pyrosetta.pose_from_file(str(pdb_file))
             pyrosetta.rosetta.core.pose.add_comment(pose, "fasta_id", record_id)
             self._attach_confidence(pose, pdb_file, record_id)
+            self._attach_confidence_metrics(pose, pdb_file, record_id)
             if self.rmsd_metrics:
                 self.tracer_warning << (
                     "Skipping RMSD metrics: structures folded from a fasta have no "
@@ -299,46 +298,49 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         self._attach_confidence(pose, pdb_file)
 
         # --- RMSD METRICS --- #
+        self._attach_rmsd_metrics(pose, input_pose)
+
+        # --- CONFIDENCE METRICS --- #
+        self._attach_confidence_metrics(pose, pdb_file)
+
+        return pose
+
+    def _attach_rmsd_metrics(self, prediction, input_pose):
+        """Computes every configured <RMSD> between the prediction and the
+        pose it was folded from.
+
+        calculation_selector picks the residues it is measured over and
+        alignment_selector the residues the structures are superimposed on.
+        The prediction keeps the numbering of the pose it was folded from, so
+        one selector reads the same residues on both."""
         for rmsd in self.rmsd_metrics:
-            # reslabel_input selects on the pose the mover was handed,
-            # reslabel_prediction on the prediction.
-            residue_selector_input = ResiduePDBInfoHasLabelSelector(rmsd["reslabel_input"])
-            residue_selector_prediction = ResiduePDBInfoHasLabelSelector(rmsd["reslabel_prediction"])
-
-            # reslabel_superimpose, when set, superimposes over a different
-            # set of residues than the RMSD is measured over - e.g. align on
-            # a fixed target chain and measure a designed binder, which
-            # reports placement rather than fold alone. Defaults to the
-            # measured residues.
-            superimpose_label = rmsd.get("reslabel_superimpose", "")
-            residue_selector_super = (
-                ResiduePDBInfoHasLabelSelector(superimpose_label) if superimpose_label else None
-            )
-
-            # A label that matches no residue (e.g. motif on a design with no
-            # scaffolded motif) would otherwise be an RMSD over nothing.
-            # Skip it and leave the score unset rather than fail the run.
-            selections = [
-                (rmsd["reslabel_input"], residue_selector_input, input_pose),
-                (rmsd["reslabel_prediction"], residue_selector_prediction, pose),
-            ]
-            if residue_selector_super is not None:
-                selections.append((superimpose_label, residue_selector_super, pose))
-            empty_labels = [
-                label for label, selector, target in selections if sum(selector.apply(target)) == 0
-            ]
-            if empty_labels:
+            measured = self.selected_positions(prediction, rmsd["calculation"])
+            if not measured:
                 self.tracer_warning << (
-                    f"Skipping RMSD {rmsd['name']}: label(s) {empty_labels} select no residues\n"
+                    f"Skipping RMSD {rmsd['name']}: calculation_selector picks no "
+                    f"residue of the prediction\n"
                 ) and self.tracer_warning.flush()
                 continue
+            measured_selector = self.index_selector(measured)
+
+            superimpose = None
+            if rmsd["alignment"] is not None:
+                aligned = self.selected_positions(prediction, rmsd["alignment"])
+                if not aligned:
+                    self.tracer_warning << (
+                        f"Skipping RMSD {rmsd['name']}: alignment_selector picks no "
+                        f"residue of the prediction\n"
+                    ) and self.tracer_warning.flush()
+                    continue
+                superimpose = self.index_selector(aligned)
 
             rmsd_metric = pyrosetta.rosetta.core.simple_metrics.metrics.RMSDMetric()
-            rmsd_metric.set_residue_selector(residue_selector_prediction)
-            rmsd_metric.set_residue_selector_reference(residue_selector_input)
+            rmsd_metric.set_residue_selector(measured_selector)
+            rmsd_metric.set_residue_selector_reference(measured_selector)
             rmsd_metric.set_comparison_pose(input_pose)
-            if residue_selector_super is not None:
-                rmsd_metric.set_residue_selector_super(residue_selector_super)
+            if superimpose is not None:
+                rmsd_metric.set_residue_selector_super(superimpose)
+                rmsd_metric.set_residue_selector_super_reference(superimpose)
             # RMSDMetric does not align by default, which for a prediction in
             # its own reference frame measures the frame offset rather than
             # any structural difference.
@@ -347,12 +349,46 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
             # defaults to all heavy atoms, i.e. sidechains included.
             rmsd_metric.set_rmsd_type(resolve_rmsd_atoms(rmsd["atoms"]))
 
-            rmsd_value = rmsd_metric.calculate(pose)
+            rmsd_value = rmsd_metric.calculate(prediction)
             rmsd_name = f"{self.prefix_name_}{rmsd['name']}"
-            setPoseExtraScore(pose, rmsd_name, rmsd_value)
+            setPoseExtraScore(prediction, rmsd_name, rmsd_value)
             self.tracer_info << f"\t{rmsd_name}: {rmsd_value}\n" and self.tracer_info.flush()
 
-        return pose
+    def _attach_confidence_metrics(self, prediction, pdb_file, record_id=None):
+        """Computes every configured <metric>: one per residue confidence
+        value boltz wrote beside pdb_file, averaged over the residues the
+        metric's selector picks."""
+        label = f"{record_id} " if record_id else ""
+        for metric in self.confidence_metrics:
+            values = self._per_residue_values(pdb_file, metric["quantity"])
+            if values is None:
+                self.tracer_warning << (
+                    f"Skipping metric {metric['name']}: boltz wrote no "
+                    f"{metric['quantity']} beside {pdb_file.name}\n"
+                ) and self.tracer_warning.flush()
+                continue
+
+            value = self.averaged_over_selection(prediction, metric["selector"], values)
+            if value is None:
+                self.tracer_warning << (
+                    f"Skipping metric {metric['name']}: its selector picks no residue\n"
+                ) and self.tracer_warning.flush()
+                continue
+
+            score_name = f"{self.prefix_name_}{metric['name']}"
+            setPoseExtraScore(prediction, score_name, value)
+            self.tracer_info << f"\t{label}{score_name}: {value}\n" and self.tracer_info.flush()
+
+    @staticmethod
+    def _per_residue_values(pdb_file, quantity):
+        """The array boltz writes beside a prediction for one quantity: plddt
+        one value per residue, pae and pde a residue by residue matrix. None
+        when boltz wrote no such file."""
+        path = pdb_file.parent / f"{quantity}_{pdb_file.stem}.npz"
+        if not path.is_file():
+            return None
+        with np.load(path) as data:
+            return data[quantity] if quantity in data.files else None
 
     def get_additional_output(self):
         # Pull-one-at-a-time: pops and returns one additional sample per
@@ -381,7 +417,6 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
         self.replace_pose_ = tag.get_option_bool("replace_pose") if tag.hasOption("replace_pose") else True
         self.extra_args_ = tag.get_option_string("extra_args") if tag.hasOption("extra_args") else ""
         self.work_dir_ = tag.get_option_string("work_dir") if tag.hasOption("work_dir") else ""
-        self.delete_dir_ = tag.get_option_bool("delete_dir") if tag.hasOption("delete_dir") else False
 
         self.tracer_info << (
             f"Parsed options:\n"
@@ -395,31 +430,27 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
             f"\treplace_pose: {self.replace_pose_}\n"
             f"\textra_args: {self.extra_args_}\n"
             f"\twork_dir: {self.work_dir_}\n"
-            f"\tdelete_dir: {self.delete_dir_}\n"
         ) and self.tracer_info.flush()
 
-        # RMSD metrics (same nested tag as ColabFold)
+        # RMSD and metric subtags, the same syntax as ColabFold
         for child in tag.getTags():
             if child.getName() == "RMSD":
-                self.rmsd_metrics.append({
-                    "name": child.get_option_string("name"),
-                    "reslabel_input": child.get_option_string("reslabel_input"),
-                    "reslabel_prediction": child.get_option_string("reslabel_prediction"),
-                    "reslabel_superimpose": (
-                        child.get_option_string("reslabel_superimpose")
-                        if child.hasOption("reslabel_superimpose") else ""
-                    ),
-                    "atoms": (
-                        child.get_option_string("atoms")
-                        if child.hasOption("atoms") else "ca"
-                    ),
-                })
+                self.rmsd_metrics.append(self.parse_rmsd_tag(child, data))
+            elif child.getName() == "metric":
+                self.confidence_metrics.append(
+                    self.parse_metric_tag(child, data, PER_RESIDUE_QUANTITIES)
+                )
         # Reject an unknown atoms= value here rather than after the
         # prediction has already run.
         for rmsd in self.rmsd_metrics:
             resolve_rmsd_atoms(rmsd["atoms"])
         rmsd_names = [f"{rmsd['name']} (atoms={rmsd['atoms']})" for rmsd in self.rmsd_metrics]
         self.tracer_info << f"RMSD metrics found: {rmsd_names}\n" and self.tracer_info.flush()
+        metric_names = [
+            f"{metric['name']} ({metric['quantity']})"
+            for metric in self.confidence_metrics
+        ]
+        self.tracer_info << f"Confidence metrics found: {metric_names}\n" and self.tracer_info.flush()
 
     @staticmethod
     def mover_name():
@@ -487,11 +518,6 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
             XMLSchemaType(xs_string),
             "Parent directory under which each apply call gets its own fresh subdirectory (so this mover instance can safely be applied more than once, e.g. from a RosettaScripts MultiplePoseMover). If not provided, a new temporary directory is used per call instead. Warning: do not set the value of this attribute to empty string, as it will cause an error in pyrosetta.",
             ""))
-        attrlist.append(XMLSchemaAttribute.attribute_w_default(
-            "delete_dir",
-            XMLSchemaType(xs_boolean),
-            "Whether to delete this call run subdirectory after every sample has been read from disk into the primary pose or the additional-output poses",
-            "false"))
 
         rmsd_attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
         rmsd_attrlist.append(
@@ -502,24 +528,18 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
             )
         )
         rmsd_attrlist.append(
-            XMLSchemaAttribute.required_attribute(
-                "reslabel_input",
+            XMLSchemaAttribute.attribute_w_default(
+                "calculation_selector",
                 XMLSchemaType(xs_string),
-                "Residue label in input over which RMSD is calculated"
-            )
-        )
-        rmsd_attrlist.append(
-            XMLSchemaAttribute.required_attribute(
-                "reslabel_prediction",
-                XMLSchemaType(xs_string),
-                "Residue label in prediction over which RMSD is calculated"
+                "Name of a residue selector naming the residues the RMSD is measured over, on both the prediction and the pose it was folded from. Every residue when not set",
+                ""
             )
         )
         rmsd_attrlist.append(
             XMLSchemaAttribute.attribute_w_default(
-                "reslabel_superimpose",
+                "alignment_selector",
                 XMLSchemaType(xs_string),
-                "Residue label to superimpose over, when it should differ from the residues the RMSD is measured over. For example superimpose on a fixed target chain and measure a designed binder, which reports how well the binder is placed and not only how well it folds. Defaults to the measured residues.",
+                "Name of a residue selector naming the residues the structures are superimposed on, when that should differ from the residues the RMSD is measured over. For example superimpose on a fixed target chain and measure a designed binder, which reports how well the binder is placed and not only how well it folds. Defaults to the measured residues",
                 ""
             )
         )
@@ -534,8 +554,33 @@ class Boltz2(pyrosetta.rosetta.protocols.moves.Mover):
 
         description = "Runs Boltz2 to predict protein structures, as an alternative to ColabFold."
 
+        metric_attrlist = pyrosetta.rosetta.std.list_utility_tag_XMLSchemaAttribute_t()
+        metric_attrlist.append(
+            XMLSchemaAttribute.required_attribute(
+                "name",
+                XMLSchemaType(xs_string),
+                "Score key this metric is reported under, after prefix_name"
+            )
+        )
+        metric_attrlist.append(
+            XMLSchemaAttribute.required_attribute(
+                "base_metric",
+                XMLSchemaType(xs_string),
+                "Which per residue confidence value is averaged: plddt, pae or pde. pae and pde are residue by residue matrices, so a selection averages the block where both residues are selected"
+            )
+        )
+        metric_attrlist.append(
+            XMLSchemaAttribute.attribute_w_default(
+                "selector",
+                XMLSchemaType(xs_string),
+                "Name of a residue selector naming the residues the confidence value is averaged over. Every residue when not set",
+                ""
+            )
+        )
+
         subelements = pyrosetta.rosetta.utility.tag.XMLSchemaSimpleSubelementList()
-        subelements.add_simple_subelement("RMSD", rmsd_attrlist, "RMSD applied over specified residue label")
+        subelements.add_simple_subelement("RMSD", rmsd_attrlist, "Self consistency RMSD between the prediction and the pose it was folded from")
+        subelements.add_simple_subelement("metric", metric_attrlist, "Confidence value averaged over the residues a selector picks")
         pyrosetta.rosetta.protocols.moves.xsd_type_definition_w_attributes_and_repeatable_subelements(
             xsd, cls.mover_name(), description, attrlist, subelements)
 

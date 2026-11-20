@@ -1,0 +1,63 @@
+<!--
+  ESMFold2 prediction: LigandMPNN redesigns chain A, a 64-residue binder,
+  holding chain B; ESMFold2 folds both sequences against one loaded model.
+
+      rosetta_link_scripts -parser:protocol examples/esmfold2_predict.xml \
+          -s examples/input_data/redesign_target.pdb -out:path output/esmfold2
+
+  or on a slurm cluster, from the repository root:
+
+      mkdir -p logs
+      CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/esmfold2_predict.xml \
+          -s examples/input_data/redesign_target.pdb -out:path output/esmfold2
+
+  ESMFold2 imports esm in process, so esm must be installed alongside
+  PyRosetta in the environment the protocol runs in.
+
+  A pdb carries no reslabels, so AddResidueLabel stamps the one the RMSD
+  selects on before anything runs.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <Chain name="chain_a" chains="A" />
+        <Chain name="chain_b" chains="B" />
+        <ResiduePDBInfoHasLabel name="redesigned" property="redesigned" />
+        <ResiduePDBInfoHasLabel name="target" property="target" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <AddResidueLabel name="label_redesigned" residue_selector="chain_a" label="redesigned" />
+        <AddResidueLabel name="label_target" residue_selector="chain_b" label="target" />
+
+        <LigandMPNN name="design_sequence"
+            batch_size="2"
+            design_selector="chain_a"
+            prefix_name="mpnn_"
+            work_dir="01_ligandmpnn" />
+
+        <ESMFold2 name="predict_structure"
+            model="biohub/ESMFold2-Fast"
+            num_diffusion_samples="1"
+            prefix_name="esm_"
+            replace_pose="true"
+            work_dir="02_esmfold2">
+            <RMSD name="scRMSD_all" />
+            <RMSD name="scRMSD_redesigned" calculation_selector="redesigned" />
+            <RMSD name="scRMSD_redesigned_on_target"
+                  calculation_selector="redesigned" alignment_selector="target" />
+            <metric name="plddt_all" base_metric="plddt" />
+            <metric name="plddt_redesigned" base_metric="plddt" selector="redesigned" />
+            <metric name="pae_redesigned" base_metric="pae" selector="redesigned" />
+        </ESMFold2>
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="label_redesigned" />
+        <Add mover="label_target" />
+        <Add mover="design_sequence" />
+        <Add mover="predict_structure" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
