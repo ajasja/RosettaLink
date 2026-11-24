@@ -1,0 +1,20 @@
+<!--
+  RFD4-Proteina generating several designs from one input.
+
+  Used by tests/integration/test_rfd4_proteina.py against the binder fixture.
+-->
+<ROSETTASCRIPTS>
+
+    <MOVERS>
+        <RFD4Proteina name="design_backbone"
+            contig="{contig}"
+            num_replicates="{num_replicates}"
+            prefix_name="rfd4_"
+            work_dir="{work_dir}/01_rfd4" />
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

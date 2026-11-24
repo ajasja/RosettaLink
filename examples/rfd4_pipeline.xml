@@ -1,0 +1,90 @@
+<!--
+  Backbones, sequences, a refold, and rosetta's own scoring.
+
+      rfd4-generate  ->  LigandMPNN  ->  rfd4-evaluate  ->  rosetta filters
+
+  Run from the root of the checkout, which the relative paths are written
+  against:
+
+      rosetta_link_scripts -parser:protocol examples/rfd4_pipeline.xml \
+          -s examples/input_data/insulin_target.pdb -out:path output
+
+  Both rfd4 stages are the same mover under a different mode.
+
+  Selection is by chain, not by reslabel: the mover stamps only `all`. A kept
+  contig segment keeps the chain letter it had in the input and a generated
+  segment is given a new one, so the target stays B and the binder becomes A.
+
+  conditioned_selector on the scoring stage names the chain that was held,
+  which is what tells rfd4 which chain was designed.
+
+  The last step of a PROTOCOLS list decides how many poses come out, so
+  everything after the scoring stage sits inside FOR_EACH_POSE.
+-->
+<ROSETTASCRIPTS>
+
+    <SCOREFXNS>
+        <ScoreFunction name="sfxn" weights="ref2015" />
+    </SCOREFXNS>
+
+    <RESIDUE_SELECTORS>
+        <Chain name="binder" chains="A" />
+        <Chain name="target" chains="B" />
+    </RESIDUE_SELECTORS>
+
+    <FILTERS>
+        <!-- ReadPoseExtraScoreFilter passes when the score is at or below
+             the threshold, so it reads a metric where low is good. This
+             build has no Not filter to invert one where high is good. -->
+        <ReadPoseExtraScoreFilter name="interface_resolved"
+            term_name="of3_oracle_ppi.overall_pae" threshold="10" />
+
+        <!-- rfd4's own verdict is of3_ppi.pass, 1 when all three of its
+             criteria hold: of3_oracle_ppi.ptm_coi at least 80,
+             of3_oracle_ppi.min_ipae_coi at most 1.5, and
+             of3_refolded_target_backbone_aligned_binder_rmsd.rmsd at most
+             2.5. Each is on the pose as a score key. -->
+
+        <LongestContinuousApolarSegment name="apolar_segment"
+            residue_selector="binder" confidence="0" />
+        <NetCharge name="netcharge" confidence="0" />
+    </FILTERS>
+
+    <MOVERS>
+        <RFD4Proteina name="backbones"
+            contig="B1-150, /0, 70-90"
+            num_replicates="2"
+            prefix_name="rfd4_"
+            work_dir="01_rfd4" />
+
+        <LigandMPNN name="sequences"
+            batch_size="2"
+            design_selector="binder"
+            fixed_selector="target"
+            prefix_name="mpnn_"
+            work_dir="02_ligandmpnn" />
+
+        <!-- One invocation scores every design it is handed. -->
+        <RFD4Proteina name="refold_and_score"
+            mode="evaluate"
+            metrics_tags="ppi_refolding"
+            conditioned_selector="target"
+            config_file="examples/rfd4_pipeline.yaml"
+            prefix_name="of3_"
+            work_dir="03_evaluate" />
+
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="backbones" />
+        <Add mover="sequences" />
+        <Add mover="refold_and_score" />
+
+        <FOR_EACH_POSE><PROTOCOLS>
+            <Add filter="interface_resolved" />
+            <Add filter="apolar_segment" />
+            <Add filter="netcharge" />
+        </PROTOCOLS></FOR_EACH_POSE>
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

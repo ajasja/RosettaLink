@@ -1,0 +1,23 @@
+# Settings for the scoring stage of rfd4_pipeline.xml.
+#
+# Every key becomes a hydra key=value argument to rfd4-evaluate, with the
+# value quoted for the shell by the mover. An argument that is not a
+# key=value pair, such as a hydra deletion, goes in extra_args instead.
+
+# Which atoms the refolding oracle is given as a structural template. Its
+# default reads annotations rfd4 writes into its own output, which a pose
+# does not carry: the oracle is then given no template and predicts the whole
+# complex from sequence alone. Naming the target chain templates it the way
+# rfd4 templates its own. The inner quotes are hydra's, whose grammar rejects
+# an unquoted value holding ==.
+metrics.refolding_oracles.oracle_ppi.template_query: "'chain_id==\"B\"'"
+
+# The two binder RMSDs align the refold on the target before measuring where
+# the binder landed. Both select the target by the absolute coordinate
+# condition alone, which a target held as a coordinate group does not match,
+# so both are dropped and ppi.pass, which needs one of them, can never be
+# met. These are the masks of RFD4-Proteina PR #60, which reach it through
+# the conditioning conditioned_selector records. Drop them once the PR is
+# released.
+metrics.refolding_metrics.refolded_target_aligned_binder_rmsd.align_mask: "\"~is_chain_of_interest & (sa_mask('C_CRD') | sa_mask('SA_CRDSRC') | is_dna)\""
+metrics.refolding_metrics.refolded_target_backbone_aligned_binder_rmsd.align_mask: "\"~is_chain_of_interest & (sa_mask('C_CRD') | sa_mask('SA_CRDSRC')) & is_protein_backbone\""

@@ -17,6 +17,21 @@ RFdiffusion:
   # or, against a checkout rather than an image:
   # run_command: /home/folivieri/miniforge3/envs/SE3nv/bin/python /home/folivieri/RFdiffusion/scripts/run_inference.py
 
+RFD4Proteina:
+  # hf_ckpt_path pointing at a directory holding config.json and
+  # model.safetensors is read off disk; a repo id instead makes every run call
+  # the Hugging Face API. CPATH is needed on a GPU node that carries a
+  # compiler but no libc headers, which triton compiles against at runtime.
+  run_command: CPATH=/path/to/sysroot/usr/include /home/folivieri/miniforge3/envs/rfd4/bin/rfd4-generate hf_ckpt_path=/path/to/rfd4-proteina-bundle
+  # run_command: singularity run --nv /home/folivieri/singularity_files/rfd4.sif rfd4-generate
+  #
+  # mode=evaluate derives its command from run_command by replacing
+  # rfd4-generate, which works only when nothing generate-specific is baked
+  # in: hydra rejects a setting the evaluate config does not declare, and
+  # hf_ckpt_path is one. Give the whole command here instead. The AF3_*
+  # variables point the refolding oracle at its model.
+  # evaluate_run_command: CPATH=/path/to/sysroot/usr/include AF3_IMAGE=/path/to/of3.sif AF3_MODEL_DIR=/path/to/weights AF3_JAX_CACHE_DIR=/path/to/jax_cache /home/folivieri/miniforge3/envs/rfd4/bin/rfd4-evaluate
+
 LigandMPNN:
   run_command: singularity run --nv /home/folivieri/singularity_files/ligandmpnn.sif
   # run_command: /home/folivieri/miniforge3/envs/ligandmpnn/bin/python /home/folivieri/LigandMPNN/run.py

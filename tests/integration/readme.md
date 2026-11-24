@@ -59,11 +59,17 @@ Keep only what the mover reads back:
 | program | keep |
 |---|---|
 | rfdiffusion | `output/_*.pdb` with the `.trb` beside each, flattened into the fixture root |
+| rfd4 | `output/inference_samples/**/*_generated.cif`, flattened into the fixture root |
 | ligandmpnn | `backbones/*.pdb` (or `packed/*.pdb`), `seqs/*.fa` |
 | colabfold | `*_unrelaxed_rank_001_*.pdb`, `*_scores_rank_001_*.json` |
 
 A `.trb` only describes the `.pdb` recorded with it, so the two are always
 copied as a pair.
+
+The `binder/rfd4` fixture is **converted, not recorded**: its structures are
+the recorded RFdiffusion backbones written back out as mmCIF. The layout
+`stubs/rfd4.py` replays around them is the real one, including the refold a
+scored run writes beside each design.
 
 Re-record when a protocol's inputs or its per-stage counts change, since a
 fixture is replayed against the input it was recorded from.

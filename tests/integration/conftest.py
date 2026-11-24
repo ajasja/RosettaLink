@@ -26,6 +26,7 @@ pytest.importorskip("pyrosetta", reason="the integration tests need PyRosetta")
 
 MOVER_OF = {
 	"rfdiffusion": "RFdiffusion",
+	"rfd4": "RFD4Proteina",
 	"ligandmpnn": "LigandMPNN",
 	"colabfold": "ColabFold",
 }

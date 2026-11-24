@@ -1,0 +1,32 @@
+<!--
+  RFD4-Proteina scoring structures it did not generate: one stage designs,
+  the next scores every design it is handed.
+
+  Used by tests/integration/test_rfd4_proteina.py against the binder fixture.
+-->
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <Chain name="target" chains="B" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <RFD4Proteina name="design_backbone"
+            config_file="{config_file}"
+            prefix_name="rfd4_"
+            work_dir="{work_dir}/01_rfd4" />
+
+        <RFD4Proteina name="score_designs"
+            mode="evaluate"
+            metrics_tags="ppi_refolding"
+            conditioned_selector="target"
+            prefix_name="of3_"
+            work_dir="{work_dir}/02_evaluate" />
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+        <Add mover="score_designs" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>

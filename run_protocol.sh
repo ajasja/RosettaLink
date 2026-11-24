@@ -2,6 +2,7 @@
 #SBATCH --job-name=rosettalink
 #SBATCH --partition=gpu-a40,gpu-l40s
 #SBATCH --gres=gpu:1
+#SBATCH --exclude=compute-6-4
 #SBATCH --cpus-per-task=2
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/slurm-%A_%x.out

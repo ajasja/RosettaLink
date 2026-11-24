@@ -11,6 +11,7 @@ BASE_DIR = 'rosettalink'
 REGISTRATION_MODULES = {
     'movers': [
         'RFdiffusion',
+        'RFD4Proteina',
         'LigandMPNN',
         'ColabFold',
         'Boltz2',

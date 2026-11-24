@@ -1,0 +1,49 @@
+<!--
+  Binder design with RFD4-Proteina: the target chain B is kept and a 90-120
+  residue binder is generated against it, twice.
+
+      rosetta_link_scripts \
+          -parser:protocol examples/rfd4_binder_design.xml \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/rfd4_binder
+
+  or on a slurm cluster, from the repository root:
+
+      mkdir -p logs
+      CONDA_ENV=my_rosettalink_env \
+          sbatch run_protocol.sh examples/rfd4_binder_design.xml \
+          -s examples/input_data/insulin_target.pdb \
+          -out:path output/rfd4_binder
+
+  The contig is RFD4-Proteina's own syntax, not RFdiffusion's: segments are
+  separated by commas, /0 starts a new chain, B1-150 keeps a segment of the
+  input and 90-120 is an expandable segment, which samples its own length. It
+  names chains and residues of the mmCIF the mover dumps, where each chain is
+  numbered from 1.
+
+  RFD4Proteina stamps only the `all` reslabel, so a stage after it selects on
+  chains. A kept segment keeps the chain letter it had in the input and the
+  generated segment is given a new one, so this contig produces chain B, the
+  target, and chain A, the binder.
+-->
+
+<ROSETTASCRIPTS>
+
+    <RESIDUE_SELECTORS>
+        <Chain name="binder" chains="A" />
+        <Chain name="target" chains="B" />
+    </RESIDUE_SELECTORS>
+
+    <MOVERS>
+        <RFD4Proteina name="design_backbone"
+            contig="B1-150, /0, 90-120"
+            num_replicates="2"
+            prefix_name="rfd4_"
+            work_dir="01_rfd4" />
+    </MOVERS>
+
+    <PROTOCOLS>
+        <Add mover="design_backbone" />
+    </PROTOCOLS>
+
+</ROSETTASCRIPTS>
